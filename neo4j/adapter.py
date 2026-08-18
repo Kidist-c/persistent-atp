@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import os
 from typing import Any, Dict, List, Optional
 
+from dotenv import load_dotenv
 from neo4j import GraphDatabase
+
+load_dotenv()
 
 from .constants import (
     ATTEMPT_STATUSES,
@@ -30,9 +34,9 @@ class Neo4jAdapter(ReplayMixin, RulesMixin):
 
     def __init__(
         self,
-        uri: str = "bolt://localhost:7687",
-        user: str = "neo4j",
-        password: str = "proofagent123",
+        uri: str = os.environ.get("NEO4J_URI", "bolt://localhost:7687"),
+        user: str = os.environ.get("NEO4J_USER", "neo4j"),
+        password: str = os.environ.get("NEO4J_PASSWORD", ""),
     ):
         self._driver = GraphDatabase.driver(uri, auth=(user, password))
         ensure_constraints(self._driver)
