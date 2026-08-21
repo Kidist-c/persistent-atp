@@ -38,5 +38,5 @@ The `commit_gate` module contains the following files:
 ### State and Orchestration
 - **`state.py`**: Defines the `ReadView` protocol required to read from the database, along with an in-memory implementation (`MemoryView`) used for testing.
 - **`apply.py`**: An engine that idempotently projects a sequence of operations onto a `MemoryView`. Used for local testing and replay.
-- **`store.py`**: An append-only SQLite journal store that handles fencing tokens and hash-chaining verification.
-- **`gate.py`**: The `CommitGate` orchestrator. It receives proposals, runs all validators via `validate.py`, and if accepted, calculates the cryptographic chain hashes.
+- **`store.py`**: An append-only SQLite journal. Every mutation runs in one `BEGIN IMMEDIATE` transaction, so the head read, the base-revision check, the lease-fencing check, and the insert cannot interleave with another writer. Only the gate may call its mutating methods.
+- **`gate.py`**: The `CommitGate` orchestrator, and the system's **sole writer**. It receives proposals, runs all validators via `validate.py`, and if accepted, chains and appends the event to the journal itself. A lost race (stale base revision, superseded fencing token) comes back as a `Rejection`, not an exception.

@@ -52,6 +52,11 @@ class Reason(StrEnum):
     PROMOTION_WITHOUT_ALIGNMENT = "promotion-without-alignment"
     ENVIRONMENT_DRIFT = "environment-drift"
 
+    # Lost races. The proposal was well formed; the journal moved under it.
+    STALE_BASE_REVISION = "stale-base-revision"
+    LEASE_NOT_HELD = "lease-not-held"
+    FENCING_TOKEN_SUPERSEDED = "fencing-token-superseded"
+
 
 @dataclass(frozen=True, slots=True)
 class Rejection:
