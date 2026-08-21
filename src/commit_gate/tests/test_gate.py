@@ -17,6 +17,9 @@ class TestCommitGate(unittest.TestCase):
 
     @staticmethod
     def _valid(node_id="p1/fs1", **overrides):
+        # `base_revision` is mandatory (`check_concurrency_tokens`); default to
+        # the empty journal's head so single-commit tests need not name it.
+        overrides.setdefault("base_revision", 0)
         return Proposal(
             proof_id="p1",
             actor="test",
@@ -33,6 +36,7 @@ class TestCommitGate(unittest.TestCase):
             actor="test",
             worker_class="test",
             ops=(UpsertNode("TacticApplication", "p1/ta1", {"executor_result": "lean-accepted"}),),
+            base_revision=0,
         )
 
     def test_gate_accepts_valid_proposal(self):
@@ -65,7 +69,7 @@ class TestCommitGate(unittest.TestCase):
 
     def test_consecutive_commits_chain(self):
         first = self.gate.commit(self._valid("p1/fs1"))
-        second = self.gate.commit(self._valid("p1/fs2"))
+        second = self.gate.commit(self._valid("p1/fs2", base_revision=1))
 
         self.assertEqual(
             self.store.read_chain("p1"),
@@ -93,6 +97,22 @@ class TestCommitGate(unittest.TestCase):
 
         self.assertTrue(result.accepted)
         self.assertEqual(result.revision, 2)
+
+    def test_a_proposal_with_no_concurrency_tokens_is_refused(self):
+        """The gate never falls back to an unchecked write."""
+        result = self.gate.commit(self._valid(base_revision=None))
+
+        self.assertFalse(result.accepted)
+        self.assertEqual(
+            [r.reason for r in result.rejections], [Reason.MISSING_CONCURRENCY_TOKEN]
+        )
+        self.assertEqual(self.store.head("p1"), (0, GENESIS_HASH))
+
+    def test_the_gate_leaves_a_verifiable_chain(self):
+        self.gate.commit(self._valid("p1/fs1"))
+        self.gate.commit(self._valid("p1/fs2", base_revision=1))
+
+        self.assertEqual(self.store.verify_chain("p1"), 2)
 
 
 if __name__ == "__main__":
