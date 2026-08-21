@@ -39,6 +39,7 @@ CLAIM_REFUTED = ClaimStatus.REFUTED.value
 CLAIM_TAINTED = ClaimStatus.TAINTED.value
 ATTEMPT_PENDING = AttemptStatus.PENDING.value
 STATE_KIND_OR = StateKind.OR.value
+STATE_KIND_AND = StateKind.AND.value
 
 
 def _check(value: str, allowed: Set[str], label: str) -> str:

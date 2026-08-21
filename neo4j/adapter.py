@@ -15,6 +15,7 @@ from .constants import (
     CLAIM_STATUSES,
     MOVE_QUEUED,
     MOVE_STATUSES,
+    STATE_KIND_AND,
     STATE_KINDS,
     STATE_OPEN,
     STATE_STATUSES,
@@ -298,8 +299,9 @@ class Neo4jAdapter(ReplayMixin, RulesMixin):
             s.run(
                 "MERGE (st:State {proof_id: $pid, id: $id}) "
                 "ON CREATE SET st.description = $desc, st.status = $open, "
-                "              st.kind = 'and', st.created_in_event = $evt",
-                pid=proof_id, id=subgoal_id, desc=description, open=STATE_OPEN, evt=event_id,
+                "              st.kind = $kind, st.created_in_event = $evt",
+                pid=proof_id, id=subgoal_id, desc=description, open=STATE_OPEN,
+                kind=STATE_KIND_AND, evt=event_id,
             )
             s.run(
                 "MATCH (p:Proof {proof_id: $pid, id: $pid}), (st:State {proof_id: $pid, id: $id}) "
