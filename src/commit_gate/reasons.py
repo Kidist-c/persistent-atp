@@ -56,6 +56,11 @@ class Reason(StrEnum):
     STALE_BASE_REVISION = "stale-base-revision"
     LEASE_NOT_HELD = "lease-not-held"
     FENCING_TOKEN_SUPERSEDED = "fencing-token-superseded"
+    JOURNAL_BUSY = "journal-busy"
+
+    # Missing concurrency control. A proposal that names no base revision
+    # cannot be checked against the journal at all, so it is never committed.
+    MISSING_CONCURRENCY_TOKEN = "missing-concurrency-token"
 
 
 @dataclass(frozen=True, slots=True)

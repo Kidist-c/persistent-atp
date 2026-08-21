@@ -40,10 +40,14 @@ class HashChainError(Exception):
 class JournalStore:
     """A SQLite-backed append-only journal of proof events."""
 
-    def __init__(self, db_path: str = ":memory:"):
+    def __init__(self, db_path: str = ":memory:", busy_timeout_ms: int = 5000):
         # Autocommit mode: `with conn:` begins no transaction when
         # isolation_level is None, so `_write` opens them explicitly.
-        self._conn = sqlite3.connect(db_path, isolation_level=None)
+        # `busy_timeout_ms` is how long a writer waits for the lock before
+        # giving up; giving up is reported as a rejection, never a hang.
+        self._conn = sqlite3.connect(
+            db_path, isolation_level=None, timeout=busy_timeout_ms / 1000
+        )
         self._conn.row_factory = sqlite3.Row
         self._init_schema()
 
@@ -76,7 +80,14 @@ class JournalStore:
     @contextmanager
     def _write(self) -> Iterator[sqlite3.Connection]:
         """Hold the database write lock for the whole block, or roll back."""
-        self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            self._conn.execute("BEGIN IMMEDIATE")
+        except sqlite3.OperationalError as exc:
+            # Another writer held the lock past the busy timeout. Nothing was
+            # written, and there is no transaction to roll back.
+            raise ConcurrencyError(
+                Reason.JOURNAL_BUSY, f"could not take the journal write lock: {exc}"
+            ) from exc
         try:
             yield self._conn
             self._conn.execute("COMMIT")
@@ -84,15 +95,19 @@ class JournalStore:
             self._conn.execute("ROLLBACK")
             raise
 
-    def head(self, proof_id: str) -> tuple[int, str]:
-        """The `(revision, event_hash)` of this proof's latest event."""
-        row = self._conn.execute(
+    def _head_row(self, proof_id: str) -> sqlite3.Row | None:
+        """This proof's latest journal row, or None if it has no events."""
+        return self._conn.execute(
             """
-            SELECT revision, event_hash FROM journal
+            SELECT revision, event_hash, prev_hash, payload FROM journal
             WHERE proof_id = ? ORDER BY revision DESC LIMIT 1
             """,
             (proof_id,),
         ).fetchone()
+
+    def head(self, proof_id: str) -> tuple[int, str]:
+        """The `(revision, event_hash)` of this proof's latest event."""
+        row = self._head_row(proof_id)
         if row is None:
             return 0, GENESIS_HASH
         return row["revision"], row["event_hash"]
@@ -127,6 +142,10 @@ class JournalStore:
         Reads the head, checks the proposal's concurrency expectations against
         it, chains onto it, and inserts — all under one write lock, so the head
         cannot move between the check and the insert.
+
+        Raises `HashChainError` if the head's own hash does not match its
+        payload: chaining onto a corrupt hash would bury the corruption under
+        a link that verifies.
         """
         proof_id = payload_dict["proof_id"]
         base_revision = payload_dict.get("base_revision")
@@ -134,7 +153,12 @@ class JournalStore:
         fencing_token = payload_dict.get("fencing_token")
 
         with self._write() as conn:
-            head_revision, head_hash = self.head(proof_id)
+            row = self._head_row(proof_id)
+            if row is None:
+                head_revision, head_hash = 0, GENESIS_HASH
+            else:
+                self._verify_row(row)
+                head_revision, head_hash = row["revision"], row["event_hash"]
 
             if base_revision is not None and base_revision != head_revision:
                 raise ConcurrencyError(
@@ -210,3 +234,48 @@ class JournalStore:
             (proof_id,),
         ).fetchall()
         return [(row["revision"], row["event_hash"], row["prev_hash"]) for row in rows]
+
+    @staticmethod
+    def _verify_row(row: sqlite3.Row) -> None:
+        """Confirm one row's `event_hash` is the hash of its own contents.
+
+        Catches a payload edited in place: the recorded hash then no longer
+        matches what the payload chains to.
+        """
+        recomputed = chain_hash(row["prev_hash"], json.loads(row["payload"]))
+        if recomputed != row["event_hash"]:
+            raise HashChainError(
+                f"revision {row['revision']} records {row['event_hash']} "
+                f"but its payload chains to {recomputed}"
+            )
+
+    def verify_chain(self, proof_id: str) -> int:
+        """Recompute a proof's whole chain; return how many events were checked.
+
+        Raises `HashChainError` at the first row that is out of sequence, does
+        not link to its predecessor, or does not hash to what it records. An
+        empty journal verifies: zero events chain trivially from genesis.
+        """
+        rows = self._conn.execute(
+            """
+            SELECT revision, event_hash, prev_hash, payload FROM journal
+            WHERE proof_id = ? ORDER BY revision ASC
+            """,
+            (proof_id,),
+        ).fetchall()
+
+        prev_hash = GENESIS_HASH
+        for expected_revision, row in enumerate(rows, start=1):
+            if row["revision"] != expected_revision:
+                raise HashChainError(
+                    f"{proof_id!r} skips from revision {expected_revision - 1} "
+                    f"to {row['revision']}"
+                )
+            if row["prev_hash"] != prev_hash:
+                raise HashChainError(
+                    f"revision {row['revision']} follows {row['prev_hash']} "
+                    f"but its predecessor is {prev_hash}"
+                )
+            self._verify_row(row)
+            prev_hash = row["event_hash"]
+        return len(rows)
