@@ -187,8 +187,7 @@ class RulesMixin:
         """Eligible moves for leasing.
 
         (Open ∪ Reopened) − (Leased ∪ Refuted ∪ Dominated ∪ Exhausted) (4.7),
-        restricted to moves whose state is neither tainted nor closed. A reopened state is
-        eligible again: `reopened` is a state status, never a move status.
+        restricted to moves whose state is neither tainted nor closed.
         """
         with self._driver.session() as s:
             result = s.run(
