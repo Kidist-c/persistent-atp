@@ -11,6 +11,7 @@ from .constants import (
     MOVE_LEASED,
     MOVE_OPEN,
     MOVE_REFUTED,
+    MOVE_REOPENED,
     STATE_CLOSED,
     STATE_REOPENED,
     STATE_TAINTED,
@@ -185,8 +186,8 @@ class RulesMixin:
     def eligible_frontier(self, proof_id: str) -> List[Dict[str, Any]]:
         """Eligible moves for leasing.
 
-        Open − (Leased ∪ Refuted ∪ Dominated ∪ Exhausted), restricted to moves
-        whose state is neither tainted nor closed. A reopened state is
+        (Open ∪ Reopened) − (Leased ∪ Refuted ∪ Dominated ∪ Exhausted) (4.7),
+        restricted to moves whose state is neither tainted nor closed. A reopened state is
         eligible again: `reopened` is a state status, never a move status.
         """
         with self._driver.session() as s:
@@ -197,7 +198,7 @@ class RulesMixin:
                 "  AND m.status <> $dominated AND m.status <> $exhausted "
                 "  AND st.status <> $tainted AND st.status <> $closed "
                 "RETURN m ORDER BY m.status, m.id",
-                pid=proof_id, eligible=[MOVE_OPEN], leased=MOVE_LEASED,
+                pid=proof_id, eligible=[MOVE_OPEN, MOVE_REOPENED], leased=MOVE_LEASED,
                 move_refuted=MOVE_REFUTED, dominated=MOVE_DOMINATED,
                 exhausted=MOVE_EXHAUSTED, tainted=STATE_TAINTED, closed=STATE_CLOSED,
             )

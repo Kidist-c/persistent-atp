@@ -100,7 +100,10 @@ STATUS_TRANSITIONS: Final[dict[tuple[str, str], dict[str, frozenset[str]]]] = {
         "open": frozenset(
             {"leased", "closed", "refuted", "dominated", "exhausted", "dead"}
         ),
-        "closed": frozenset(),
+        "closed": frozenset({"reopened"}),
+        "reopened": frozenset(
+            {"leased", "closed", "refuted", "dominated", "exhausted", "dead"}
+        ),
         "refuted": frozenset(),
         "dominated": frozenset(),
         "exhausted": frozenset(),

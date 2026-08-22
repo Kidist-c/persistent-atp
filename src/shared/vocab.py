@@ -107,6 +107,7 @@ class TacticStatus(StrEnum):
     OPEN = "open"
     LEASED = "leased"
     CLOSED = "closed"
+    REOPENED = "reopened"
     REFUTED = "refuted"
     DOMINATED = "dominated"
     EXHAUSTED = "exhausted"
