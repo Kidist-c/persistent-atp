@@ -1,16 +1,35 @@
 ;; Auto-generated MORK atoms from event journal
 
+;; Schema:
+;;   (node <proof> <id> <label>)
+;;   (field <proof> <id> <name> <value>)
+;;   (edge <proof> <eid> <rel> <src> <dst>)
+;;   (efield <proof> <eid> <name> <value>)
+
 ;; Initialize MORK space
 !(mm2-exec &mork 1)
 
-!(add-atom &mork (State "even-sum-proof" "s1" "Prove: if n even and m even, then n+m even" "open" "or"))
-!(add-atom &mork (Claim "even-sum-proof" "c1" "If n is even, then n = 2k for some integer k" "conjectural"))
-!(add-atom &mork (Move "even-sum-proof" "m1" "s1" "open" "reduction" "Expand definition of even numbers"))
-!(add-atom &mork (Attempt "even-sum-proof" "a1" "s1" "supported" "llm-explorer-1" "Expanded definition: n=2k, m=2j, so n+m=2(k+j)"))
-!(add-atom &mork (Edge "e1" SUPPORTED_BY "s1" "c1"))
-!(add-atom &mork (Edge "e2" PROPOSES "s1" "m1"))
-!(add-atom &mork (Edge "e3" ON_STATE "a1" "s1"))
-!(add-atom &mork (Edge "e4" ON_MOVE "a1" "m1"))
+!(add-atom &mork (node "even-sum-proof" "s1" "State"))
+!(add-atom &mork (field "even-sum-proof" "s1" "description" "Prove: if n even and m even, then n+m even"))
+!(add-atom &mork (field "even-sum-proof" "s1" "status" "open"))
+!(add-atom &mork (field "even-sum-proof" "s1" "kind" "or"))
+!(add-atom &mork (node "even-sum-proof" "c1" "Claim"))
+!(add-atom &mork (field "even-sum-proof" "c1" "statement" "If n is even, then n = 2k for some integer k"))
+!(add-atom &mork (field "even-sum-proof" "c1" "status" "conjectural"))
+!(add-atom &mork (node "even-sum-proof" "m1" "Move"))
+!(add-atom &mork (field "even-sum-proof" "m1" "state_id" "s1"))
+!(add-atom &mork (field "even-sum-proof" "m1" "summary" "Expand definition of even numbers"))
+!(add-atom &mork (field "even-sum-proof" "m1" "status" "open"))
+!(add-atom &mork (field "even-sum-proof" "m1" "kind" "reduction"))
+!(add-atom &mork (node "even-sum-proof" "a1" "Attempt"))
+!(add-atom &mork (field "even-sum-proof" "a1" "state_id" "s1"))
+!(add-atom &mork (field "even-sum-proof" "a1" "move_summary" "Expanded definition: n=2k, m=2j, so n+m=2(k+j)"))
+!(add-atom &mork (field "even-sum-proof" "a1" "status" "supported"))
+!(add-atom &mork (field "even-sum-proof" "a1" "worker" "llm-explorer-1"))
+!(add-atom &mork (edge "even-sum-proof" "e1" "SUPPORTED_BY" "s1" "c1"))
+!(add-atom &mork (edge "even-sum-proof" "e2" "PROPOSES" "s1" "m1"))
+!(add-atom &mork (edge "even-sum-proof" "e3" "ON_STATE" "a1" "s1"))
+!(add-atom &mork (edge "even-sum-proof" "e4" "ON_MOVE" "a1" "m1"))
 
 
 ;; ============================================
@@ -18,47 +37,46 @@
 ;; ============================================
 
 ;; Query 1: Find all open states
-!(test (collapse (match &mork (State "even-sum-proof" $sid $desc "open" $kind)
-                           (open-state $sid $desc $kind)))
-       ((open-state "s1" "Prove: if n even and m even, then n+m even" "or")))
+!(match &mork
+  (, (node $proof $sid "State")
+     (field $proof $sid "status" "open"))
+  (open-state $proof $sid))
 
-;; Query 2: Find all claims and their status
-!(test (collapse (match &mork (Claim "even-sum-proof" $cid $stmt $status)
-                          (claim-info $cid $stmt $status)))
-       ((claim-info "c1" "If n is even, then n = 2k for some integer k" "conjectural")))
 
-;; Query 3: Find all moves and their kind
-!(test (collapse (match &mork (Move "even-sum-proof" $mid $state "open" $kind $summary)
-                          (open-move $mid $kind $summary)))
-       ((open-move "m1" "reduction" "Expand definition of even numbers")))
+; ;; Query 2: Find all claims and their status
+!(match &mork
+  (, (node $proof $cid "Claim")
+     (field $proof $cid "statement" $stmt)
+     (field $proof $cid "status" $status))
+  (claim-info $proof $cid $stmt $status))
 
-;; Query 4: Find all attempts and their workers
-!(test (collapse (match &mork (Attempt "even-sum-proof" $aid $state $status $worker $summary)
-                          (attempt-info $aid $status $worker $summary)))
-       ((attempt-info "a1" "supported" "llm-explorer-1" "Expanded definition: n=2k, m=2j, so n+m=2(k+j)")))
+; ;; Query 3: Find all moves and their kind
+!(match &mork
+  (, (node $proof $mid "Move")
+     (field $proof $mid "state_id" $state)
+     (field $proof $mid "status" $status)
+     (field $proof $mid "kind" $kind)
+     (field $proof $mid "summary" $summary))
+  (move-info $proof $mid $state $status $kind $summary))
 
-;; Query 5: Find what claims support a state (via SUPPORTED_BY edges)
-!(test (collapse (match &mork (Edge $eid SUPPORTED_BY $sid $cid)
-                          (support-edge $eid $sid $cid)))
-       ((support-edge "e1" "s1" "c1")))
+; ;; Query 4: Find all attempts and their workers
+!(match &mork
+  (, (node $proof $aid "Attempt")
+     (field $proof $aid "state_id" $state)
+     (field $proof $aid "worker" $worker)
+     (field $proof $aid "move_summary" $summary))
+  (attempt-info $proof $aid $state $worker $summary))
 
-;; Query 6: Find what moves are proposed by a state (via PROPOSES edges)
-!(test (collapse (match &mork (Edge $eid PROPOSES $sid $mid)
-                          (propose-edge $eid $sid $mid)))
-       ((propose-edge "e2" "s1" "m1")))
+; ;; Query 5: Find all edges
+!(match &mork
+  (edge $proof $eid $rel $src $dst)
+  (edge-info $eid $rel $src $dst))
 
-;; Query 7: Find what state an attempt is on (via ON_STATE edges)
-!(test (collapse (match &mork (Edge $eid ON_STATE $aid $sid)
-                          (on-state-edge $eid $aid $sid)))
-       ((on-state-edge "e3" "a1" "s1")))
-
-;; Query 8: Find what move an attempt references (via ON_MOVE edges)
-!(test (collapse (match &mork (Edge $eid ON_MOVE $aid $mid)
-                          (on-move-edge $eid $aid $mid)))
-       ((on-move-edge "e4" "a1" "m1")))
-
-;; Query 9: Find supported attempts (completed work)
-!(test (collapse (match &mork (Attempt "even-sum-proof" $aid $state "supported" $worker $summary)
-                          (supported-attempt $aid $worker $summary)))
-       ((supported-attempt "a1" "llm-explorer-1" "Expanded definition: n=2k, m=2j, so n+m=2(k+j)")))
+; ;; Query 6: Find supported attempts (completed work)
+!(match &mork
+  (, (node $proof $aid "Attempt")
+     (field $proof $aid "status" "supported")
+     (field $proof $aid "worker" $worker)
+     (field $proof $aid "move_summary" $summary))
+  (supported-attempt $proof $aid $worker $summary))
 
