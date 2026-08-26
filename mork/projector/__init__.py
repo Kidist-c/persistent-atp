@@ -8,9 +8,6 @@ Public API:
 """
 
 from .core import (
-    EDGE_REL_MAP,
-    NODE_FIELD_ORDER,
-    NODE_TYPE_MAP,
     Projector,
     extract_local_id,
     extract_proof_id,
@@ -31,9 +28,6 @@ __all__ = [
     "sanitize_value",
     "extract_proof_id",
     "extract_local_id",
-    "NODE_TYPE_MAP",
-    "NODE_FIELD_ORDER",
-    "EDGE_REL_MAP",
     "project_journal_to_file",
     "safe_filename",
 ]
