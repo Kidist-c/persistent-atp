@@ -697,13 +697,23 @@ def check_alignment_gate(proposal: Proposal, view: ReadView) -> Iterator[Rejecti
             )
 
 
+ 
 def _node_fields(node_id: str, proposal: Proposal, view: ReadView) -> Mapping[str, Any]:
-    """Fields for a node, from this proposal's own creation or from view."""
+    """Fields for a node, preferring committed state over the proposal.
+ 
+    `UpsertNode` creates a node or confirms an existing one -- it is never a
+    mutation. `apply_ops` drops a re-upsert of an already-committed node, so
+    a proposal cannot lie about a node's fields by re-upserting it with
+    different values. Only a genuinely new node (absent from `view`) may
+    take its fields from this proposal's own `UpsertNode`.
+    """
+    record = view.node(node_id)
+    if record is not None:
+        return record.fields
     for op in proposal.ops:
         if isinstance(op, UpsertNode) and op.node_id == node_id:
             return op.fields
-    record = view.node(node_id)
-    return record.fields if record is not None else {}
+    return {}
 
 
 def _edge_targets(
@@ -736,11 +746,13 @@ def _has_verified_sorry_free_replay(
     claim_id: str, proposal: Proposal, view: ReadView
 ) -> bool:
     for certificate_id in _edge_targets(claim_id, "PROVED_BY", proposal, view):
+        certificate_actor = _node_fields(certificate_id, proposal, view).get("actor")
         for replay_id in _edge_targets(certificate_id, "REPLAYED_BY", proposal, view):
             fields = _node_fields(replay_id, proposal, view)
             if (
                 fields.get("status") == ReplayStatus.VERIFIED.value
                 and fields.get("sorry_detected") is False
+                and fields.get("actor") != certificate_actor
             ):
                 return True
     return False
