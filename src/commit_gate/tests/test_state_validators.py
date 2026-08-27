@@ -232,6 +232,6 @@ class TestSoundnessGates(unittest.TestCase):
         proposal = propose(self._promote_claim())
         self.assertEqual(self.validate(proposal), [])
 
->>>>>>> 76fb03e (add 11 soundness Tests for 3 soundness validators)
+
 if __name__ == "__main__":
     unittest.main()
