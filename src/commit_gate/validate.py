@@ -642,28 +642,35 @@ def check_replay_evidence(proposal: Proposal, view: ReadView) -> Iterator[Reject
 
 def check_self_certification(proposal: Proposal, view: ReadView) -> Iterator[Rejection]:
     """A replay actor cannot be the same actor who produced the certificate.
-
+ 
     A `LeanReplay` is only independent evidence if someone other than the
-    certificate's own producer ran it.
+    certificate's own producer ran it. 
+    The trigger is the `REPLAYED_BY` edge
+    itself, not the `LeanReplay` upsert: a replay can be created in one
+    proposal and linked to its certificate in a later one, and the gate
+    must still catch a self-certified pairing at the point the link is
+    actually made.
     """
     for index, op in enumerate(proposal.ops):
-        if not (isinstance(op, UpsertNode) and op.label == "LeanReplay"):
+        if not (isinstance(op, AddEdge) and op.rel_type == "REPLAYED_BY"):
             continue
-
-        replay_actor = op.fields.get("actor")
-        if replay_actor is None:
-            continue  # caught elsewhere (missing required field)
-
-        for certificate_id in _edge_sources(op.node_id, "REPLAYED_BY", proposal, view):
-            certificate_actor = _node_fields(certificate_id, proposal, view).get("actor")
-            if certificate_actor is not None and certificate_actor == replay_actor:
-                yield Rejection(
-                    Reason.SELF_CERTIFICATION,
-                    f"LeanReplay {op.node_id!r} actor {replay_actor!r} matches "
-                    f"producing Certificate {certificate_id!r}; self-certified "
-                    "replay is rejected",
-                    index,
-                )
+ 
+        certificate_id = op.src_id
+        replay_id = op.dst_id
+        replay_actor = _node_fields(replay_id, proposal, view).get("actor")
+        certificate_actor = _node_fields(certificate_id, proposal, view).get("actor")
+        if (
+            replay_actor is not None
+            and certificate_actor is not None
+            and replay_actor == certificate_actor
+        ):
+            yield Rejection(
+                Reason.SELF_CERTIFICATION,
+                f"LeanReplay {replay_id!r} actor {replay_actor!r} matches "
+                f"producing Certificate {certificate_id!r}; self-certified "
+                "replay is rejected",
+                index,
+            )
 
 
 def check_alignment_gate(proposal: Proposal, view: ReadView) -> Iterator[Rejection]:
