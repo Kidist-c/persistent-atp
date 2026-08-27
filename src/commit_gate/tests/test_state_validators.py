@@ -233,5 +233,66 @@ class TestSoundnessGates(unittest.TestCase):
         self.assertEqual(self.validate(proposal), [])
 
 
+ # -- test for: re-upsert cannot launder committed state, and
+    #    self-certification is caught even across two proposals ------------
+ 
+    def test_re_upsert_cannot_launder_a_rejected_committed_replay(self):
+        """apply_ops drops a re-upsert of an already-committed node -- it is
+        identity confirmation, never a mutation. The validator must read the
+        committed fields, not whatever the proposal's UpsertNode claims."""
+        self.view.add_node("p1/cert1", "Certificate", {"actor": "producer"})
+        self.view.add_node(
+            "p1/replay1",
+            "LeanReplay",
+            {"actor": "checker", "status": "rejected", "sorry_detected": True},
+        )
+        self.view.add_edge("PROVED_BY", "p1/claim1", "p1/cert1", "p1/e1")
+        self.view.add_edge("REPLAYED_BY", "p1/cert1", "p1/replay1", "p1/e2")
+ 
+        proposal = propose(
+            UpsertNode(
+                "LeanReplay",
+                "p1/replay1",
+                {"actor": "checker", "status": "verified", "sorry_detected": False},
+            ),
+            self._promote_claim(),
+        )
+        self.assertIn(Reason.PROMOTION_WITHOUT_REPLAY, self.validate(proposal))
+ 
+    def test_self_certification_across_two_proposals_is_rejected(self):
+        """The replay was created and linked to its certificate in an earlier,
+        already-committed proposal. A later proposal only promotes the claim
+        -- the gate must still catch that the replay was self-certified."""
+        self.view.add_node("p1/cert1", "Certificate", {"actor": "same-person"})
+        self.view.add_node(
+            "p1/replay1",
+            "LeanReplay",
+            {"actor": "same-person", "status": "verified", "sorry_detected": False},
+        )
+        self.view.add_edge("PROVED_BY", "p1/claim1", "p1/cert1", "p1/e1")
+        self.view.add_edge("REPLAYED_BY", "p1/cert1", "p1/replay1", "p1/e2")
+ 
+        proposal = propose(self._promote_claim())
+        self.assertIn(Reason.PROMOTION_WITHOUT_REPLAY, self.validate(proposal))
+ 
+    def test_self_certified_link_made_in_a_later_proposal_is_rejected(self):
+        """The replay node already exists (committed, independently); a later
+        proposal only adds the REPLAYED_BY edge linking it to the certificate.
+        check_self_certification must trigger on that edge, not just on a
+        same-proposal LeanReplay upsert, and must produce the specific
+        SELF_CERTIFICATION reason at the point the link is made."""
+        self.view.add_node("p1/cert1", "Certificate", {"actor": "same-person"})
+        self.view.add_node(
+            "p1/replay1",
+            "LeanReplay",
+            {"actor": "same-person", "status": "verified", "sorry_detected": False},
+        )
+        self.view.add_edge("PROVED_BY", "p1/claim1", "p1/cert1", "p1/e1")
+ 
+        proposal = propose(AddEdge("REPLAYED_BY", "p1/cert1", "p1/replay1", "p1/e2"))
+        self.assertIn(Reason.SELF_CERTIFICATION, self.validate(proposal))
+ 
+
+
 if __name__ == "__main__":
     unittest.main()
