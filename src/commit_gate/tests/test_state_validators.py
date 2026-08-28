@@ -291,6 +291,24 @@ class TestSoundnessGates(unittest.TestCase):
  
         proposal = propose(AddEdge("REPLAYED_BY", "p1/cert1", "p1/replay1", "p1/e2"))
         self.assertIn(Reason.SELF_CERTIFICATION, self.validate(proposal))
+    def test_actorless_certificate_cannot_launder_a_self_report(self):
+        """A Certificate with no `actor` recorded must not be treated as
+        'provably a different actor' from the replay. Missing evidence is
+        insufficient evidence, not proof of independence -- promotion must
+        stay blocked, even with a satisfied alignment record."""
+        self.view.add_node("p1/cert1", "Certificate", {})  # no actor at all
+        self.view.add_node(
+            "p1/replay1",
+            "LeanReplay",
+            {"actor": "same-person", "status": "verified", "sorry_detected": False},
+        )
+        self.view.add_edge("PROVED_BY", "p1/claim1", "p1/cert1", "p1/e1")
+        self.view.add_edge("REPLAYED_BY", "p1/cert1", "p1/replay1", "p1/e2")
+        self.view.add_node("p1/align1", "Alignment", {"lifecycle": "reviewed", "verdict": "aligned"})
+        self.view.add_edge("ALIGNS_CLAIM", "p1/align1", "p1/claim1", "p1/e3")
+ 
+        proposal = propose(self._promote_claim())
+        self.assertIn(Reason.PROMOTION_WITHOUT_REPLAY, self.validate(proposal))
  
 
 

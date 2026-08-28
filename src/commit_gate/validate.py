@@ -749,10 +749,13 @@ def _has_verified_sorry_free_replay(
         certificate_actor = _node_fields(certificate_id, proposal, view).get("actor")
         for replay_id in _edge_targets(certificate_id, "REPLAYED_BY", proposal, view):
             fields = _node_fields(replay_id, proposal, view)
+            replay_actor = fields.get("actor")
             if (
                 fields.get("status") == ReplayStatus.VERIFIED.value
                 and fields.get("sorry_detected") is False
-                and fields.get("actor") != certificate_actor
+                and replay_actor is not None
+                and certificate_actor is not None
+                and replay_actor != certificate_actor
             ):
                 return True
     return False
