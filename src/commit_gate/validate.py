@@ -12,7 +12,7 @@ rather than the first failure.
 from __future__ import annotations
 
 from collections import defaultdict
-from typing import Any, Iterator
+from typing import Any, Iterator, Mapping
 
 from .ops import UNSET, AddEdge, Op, RemoveEdge, SetField, UpsertNode
 from .proposal import Proposal
@@ -49,6 +49,10 @@ __all__ = [
     "check_status_transitions",
     "check_immutability",
     "check_stagnation_obstruction",
+    "check_replay_evidence",
+    "check_self_certification",
+    "check_alignment_gate",
+
 ]
 
 ENUM_FIELDS: dict[tuple[str, str], type] = {
@@ -129,6 +133,9 @@ def validate_proposal(proposal: Proposal, view: ReadView | None = None) -> list[
         findings.extend(check_status_transitions(proposal, view))
         findings.extend(check_immutability(proposal, view))
         findings.extend(check_stagnation_obstruction(proposal, view))
+        findings.extend(check_replay_evidence(proposal, view)) 
+        findings.extend(check_self_certification(proposal, view)) 
+        findings.extend(check_alignment_gate(proposal, view))
 
     return findings
 
@@ -605,3 +612,163 @@ def check_stagnation_obstruction(proposal: Proposal, view: ReadView) -> Iterator
                 f"FormalRun {op.node_id!r} marked stagnated without a RAISED_OBSTRUCTION edge",
                 index,
             )
+
+# -- Proof soundness gates ---
+
+def check_replay_evidence(proposal: Proposal, view: ReadView) -> Iterator[Rejection]:
+    """A claim cannot become lean-verified on a self-report.
+
+    Promotion requires an independently checkable replay: the claim's
+    certificate must have been replayed, the replay must have passed, and
+    the replay must not have silently accepted a `sorry`.
+    """
+    for index, op in enumerate(proposal.ops):
+        if not (
+            isinstance(op, SetField)
+            and op.label == "Claim"
+            and op.field == "status"
+            and op.value == ClaimStatus.LEAN_VERIFIED.value
+        ):
+            continue
+
+        if not _has_verified_sorry_free_replay(op.node_id, proposal, view):
+            yield Rejection(
+                Reason.PROMOTION_WITHOUT_REPLAY,
+                f"Claim {op.node_id!r} promoted to lean-verified without "
+                "a verified, sorry-free replay",
+                index,
+            )
+
+
+def check_self_certification(proposal: Proposal, view: ReadView) -> Iterator[Rejection]:
+    """A replay actor cannot be the same actor who produced the certificate.
+ 
+    A `LeanReplay` is only independent evidence if someone other than the
+    certificate's own producer ran it. 
+    The trigger is the `REPLAYED_BY` edge
+    itself, not the `LeanReplay` upsert: a replay can be created in one
+    proposal and linked to its certificate in a later one, and the gate
+    must still catch a self-certified pairing at the point the link is
+    actually made.
+    """
+    for index, op in enumerate(proposal.ops):
+        if not (isinstance(op, AddEdge) and op.rel_type == "REPLAYED_BY"):
+            continue
+ 
+        certificate_id = op.src_id
+        replay_id = op.dst_id
+        replay_actor = _node_fields(replay_id, proposal, view).get("actor")
+        certificate_actor = _node_fields(certificate_id, proposal, view).get("actor")
+        if (
+            replay_actor is not None
+            and certificate_actor is not None
+            and replay_actor == certificate_actor
+        ):
+            yield Rejection(
+                Reason.SELF_CERTIFICATION,
+                f"LeanReplay {replay_id!r} actor {replay_actor!r} matches "
+                f"producing Certificate {certificate_id!r}; self-certified "
+                "replay is rejected",
+                index,
+            )
+
+
+def check_alignment_gate(proposal: Proposal, view: ReadView) -> Iterator[Rejection]:
+    """A claim cannot become lean-verified without a reviewed, aligned check.
+
+    An independently reviewed `Alignment` record confirms the formal
+    declaration actually says what the informal claim says.
+    """
+    for index, op in enumerate(proposal.ops):
+        if not (
+            isinstance(op, SetField)
+            and op.label == "Claim"
+            and op.field == "status"
+            and op.value == ClaimStatus.LEAN_VERIFIED.value
+        ):
+            continue
+
+        if not _has_reviewed_aligned_alignment(op.node_id, proposal, view):
+            yield Rejection(
+                Reason.PROMOTION_WITHOUT_ALIGNMENT,
+                f"Claim {op.node_id!r} promoted to lean-verified without "
+                "a reviewed, aligned Alignment record",
+                index,
+            )
+
+
+ 
+def _node_fields(node_id: str, proposal: Proposal, view: ReadView) -> Mapping[str, Any]:
+    """Fields for a node, preferring committed state over the proposal.
+ 
+    `UpsertNode` creates a node or confirms an existing one -- it is never a
+    mutation. `apply_ops` drops a re-upsert of an already-committed node, so
+    a proposal cannot lie about a node's fields by re-upserting it with
+    different values. Only a genuinely new node (absent from `view`) may
+    take its fields from this proposal's own `UpsertNode`.
+    """
+    record = view.node(node_id)
+    if record is not None:
+        return record.fields
+    for op in proposal.ops:
+        if isinstance(op, UpsertNode) and op.node_id == node_id:
+            return op.fields
+    return {}
+
+
+def _edge_targets(
+    src_id: str, rel_type: str, proposal: Proposal, view: ReadView
+) -> list[str]:
+    """Destination ids of `rel_type` edges leaving `src_id` -- proposal + committed."""
+    targets = [
+        op.dst_id
+        for op in proposal.ops
+        if isinstance(op, AddEdge) and op.rel_type == rel_type and op.src_id == src_id
+    ]
+    targets.extend(e.dst_id for e in view.edges_from(src_id, rel_type))
+    return targets
+
+
+def _edge_sources(
+    dst_id: str, rel_type: str, proposal: Proposal, view: ReadView
+) -> list[str]:
+    """Source ids of `rel_type` edges entering `dst_id` -- proposal + committed."""
+    sources = [
+        op.src_id
+        for op in proposal.ops
+        if isinstance(op, AddEdge) and op.rel_type == rel_type and op.dst_id == dst_id
+    ]
+    sources.extend(e.src_id for e in view.edges_to(dst_id, rel_type))
+    return sources
+
+
+def _has_verified_sorry_free_replay(
+    claim_id: str, proposal: Proposal, view: ReadView
+) -> bool:
+    for certificate_id in _edge_targets(claim_id, "PROVED_BY", proposal, view):
+        certificate_actor = _node_fields(certificate_id, proposal, view).get("actor")
+        for replay_id in _edge_targets(certificate_id, "REPLAYED_BY", proposal, view):
+            fields = _node_fields(replay_id, proposal, view)
+            replay_actor = fields.get("actor")
+            if (
+                fields.get("status") == ReplayStatus.VERIFIED.value
+                and fields.get("sorry_detected") is False
+                and replay_actor is not None
+                and certificate_actor is not None
+                and replay_actor != certificate_actor
+            ):
+                return True
+    return False
+
+
+def _has_reviewed_aligned_alignment(
+    claim_id: str, proposal: Proposal, view: ReadView
+) -> bool:
+    for alignment_id in _edge_sources(claim_id, "ALIGNS_CLAIM", proposal, view):
+        fields = _node_fields(alignment_id, proposal, view)
+        if (
+            fields.get("lifecycle") == AlignmentLifecycle.REVIEWED.value
+            and fields.get("verdict") == AlignmentVerdict.ALIGNED.value
+        ):
+            return True
+    return False
