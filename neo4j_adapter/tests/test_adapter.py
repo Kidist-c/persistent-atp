@@ -239,9 +239,6 @@ class TestNeo4jAdapter(unittest.TestCase):
         self.adapter.add_claim(self.PROOF_ID, "c1", "stmt1", event_id="ev1")
         self.adapter.add_claim(self.PROOF_ID, "c2", "stmt2", event_id="ev2")
         with self.assertRaises(ValueError):
-            # DROP TABLE isn't a real Cypher risk here since it's an f-string
-            # relationship *type*, not a full query -- but it's still not
-            # whitelisted, which is what we're actually testing.
             self.adapter.add_relation(self.PROOF_ID, "NOT_A_REAL_REL", "c1", "c2")
 
 
