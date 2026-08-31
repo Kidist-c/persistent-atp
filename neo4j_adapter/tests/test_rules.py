@@ -1,10 +1,9 @@
-
 import unittest
 from neo4j_adapter.adapter import Neo4jAdapter
 from neo4j_adapter.constants import (
-    STATE_CLOSED, STATE_TAINTED, STATE_REOPENED, STATE_KIND_OR,
+    STATE_CLOSED, STATE_TAINTED, STATE_REOPENED,
     MOVE_CLOSED, MOVE_OPEN, MOVE_LEASED, MOVE_REFUTED,
-    
+    CLAIM_REFUTED, CLAIM_TAINTED,
 )
 
 
@@ -72,6 +71,37 @@ class TestRules(unittest.TestCase):
         root = self.adapter.get_state("root", self.PROOF_ID)
         self.assertEqual(root["status"], STATE_CLOSED)
 
+    def test_close_state_respects_max_iter_bound_when_propagation_is_capped(self):
+        """Build a deep 4-level linear AND/OR goal tree:
+           s0 <- m1 <- s1 <- m2 <- s2 <- m3 <- s3
+
+        Closing s3 requires 3 iterations of the AND/OR loop to reach s0.
+        If max_iter=1, only m3 and s2 close; s0 and s1 remain open.
+        """
+        self.adapter.add_state(self.PROOF_ID, "s0", "root", event_id="e1")
+        self.adapter.add_move(self.PROOF_ID, "m1", "s0", "move 1", event_id="e2")
+        self.adapter.add_required_subgoal(self.PROOF_ID, "m1", "s1", "subgoal 1", event_id="e3")
+
+        self.adapter.add_move(self.PROOF_ID, "m2", "s1", "move 2", event_id="e4")
+        self.adapter.add_required_subgoal(self.PROOF_ID, "m2", "s2", "subgoal 2", event_id="e5")
+
+        self.adapter.add_move(self.PROOF_ID, "m3", "s2", "move 3", event_id="e6")
+        self.adapter.add_required_subgoal(self.PROOF_ID, "m3", "s3", "subgoal 3", event_id="e7")
+
+        # Manually invoke fixpoint with max_iter=1 to verify bounded propagation
+        self.adapter.update_state_status(self.PROOF_ID, "s3", STATE_CLOSED, event_id="e8")
+        self.adapter._propagate_closures(self.PROOF_ID, event_id="e9", max_iter=1)
+
+        # Iteration 1 closed m3 and s2
+        m3 = next(m for m in self.adapter.get_moves_for_state("s2", self.PROOF_ID) if m["id"] == "m3")
+        s2 = self.adapter.get_state("s2", self.PROOF_ID)
+        self.assertEqual(m3["status"], MOVE_CLOSED)
+        self.assertEqual(s2["status"], STATE_CLOSED)
+
+        # Root state s0 remains unclosed due to iteration cap
+        s0 = self.adapter.get_state("s0", self.PROOF_ID)
+        self.assertNotEqual(s0["status"], STATE_CLOSED)
+
     # -- taint propagation ------------------------------------------------
 
     def test_propagate_taint_refutes_taints_and_reopens(self):
@@ -94,10 +124,56 @@ class TestRules(unittest.TestCase):
         self.assertIn("s1", result["reopened_states"])
 
         c1 = next(c for c in self.adapter.get_all_claims(self.PROOF_ID) if c["id"] == "c1")
-        self.assertEqual(c1["status"], "refuted")
+        self.assertEqual(c1["status"], CLAIM_REFUTED)
 
         s1 = self.adapter.get_state("s1", self.PROOF_ID)
         self.assertEqual(s1["status"], STATE_REOPENED)
+
+    def test_multi_level_claim_dependency_cascade(self):
+        """Deep claim dependency chain: c4 -> c3 -> c2 -> c1
+
+        Closed state s1 uses c4, closed state s2 uses c3.
+        Refuting root claim c1 must:
+        1. Set c1 status to CLAIM_REFUTED
+        2. Taint all downstream claims [c2, c3, c4]
+        3. Reopen all closed states [s1, s2] relying on any tainted claim
+        """
+        self.adapter.add_claim(self.PROOF_ID, "c1", "leaf claim", event_id="e1")
+        self.adapter.add_claim(self.PROOF_ID, "c2", "mid-low claim", event_id="e2")
+        self.adapter.add_claim(self.PROOF_ID, "c3", "mid-high claim", event_id="e3")
+        self.adapter.add_claim(self.PROOF_ID, "c4", "top claim", event_id="e4")
+
+        self.adapter.add_claim_dependency("c2", "c1", proof_id=self.PROOF_ID, event_id="e5")
+        self.adapter.add_claim_dependency("c3", "c2", proof_id=self.PROOF_ID, event_id="e6")
+        self.adapter.add_claim_dependency("c4", "c3", proof_id=self.PROOF_ID, event_id="e7")
+
+        self.adapter.add_state(self.PROOF_ID, "s1", "top state", event_id="e8")
+        self.adapter.link_state_claim(self.PROOF_ID, "s1", "c4", event_id="e9")
+        self.adapter.update_state_status(self.PROOF_ID, "s1", STATE_CLOSED, event_id="e10")
+
+        self.adapter.add_state(self.PROOF_ID, "s2", "mid state", event_id="e11")
+        self.adapter.link_state_claim(self.PROOF_ID, "s2", "c3", event_id="e12")
+        self.adapter.update_state_status(self.PROOF_ID, "s2", STATE_CLOSED, event_id="e13")
+
+        result = self.adapter.propagate_taint(self.PROOF_ID, "c1", event_id="e14", reason="found counterexample")
+
+        # Verify all transitively dependent claims were tainted
+        self.assertCountEqual(result["tainted"], ["c2", "c3", "c4"])
+
+        # Verify all affected closed states were reopened
+        self.assertCountEqual(result["reopened_states"], ["s1", "s2"])
+
+        # Verify persisted statuses in the database
+        all_claims = {c["id"]: c for c in self.adapter.get_all_claims(self.PROOF_ID)}
+        self.assertEqual(all_claims["c1"]["status"], CLAIM_REFUTED)
+        self.assertEqual(all_claims["c2"]["status"], CLAIM_TAINTED)
+        self.assertEqual(all_claims["c3"]["status"], CLAIM_TAINTED)
+        self.assertEqual(all_claims["c4"]["status"], CLAIM_TAINTED)
+
+        s1_node = self.adapter.get_state("s1", self.PROOF_ID)
+        s2_node = self.adapter.get_state("s2", self.PROOF_ID)
+        self.assertEqual(s1_node["status"], STATE_REOPENED)
+        self.assertEqual(s2_node["status"], STATE_REOPENED)
 
     def test_taint_cone_returns_transitive_dependents(self):
         self.adapter.add_claim(self.PROOF_ID, "c1", "base", event_id="e1")
@@ -144,7 +220,7 @@ class TestRules(unittest.TestCase):
         self.adapter.add_claim_dependency("c1", "c2", proof_id=self.PROOF_ID, event_id="e3")
 
         self.assertFalse(
-            self.adapter._would_create_cycle("c2", "c3", self.PROOF_ID)  # c3 doesn't even exist -- no path
+            self.adapter._would_create_cycle("c2", "c3", self.PROOF_ID)
         )
 
     def test_would_create_cycle_true_when_reverse_edge_exists(self):
@@ -152,7 +228,6 @@ class TestRules(unittest.TestCase):
         self.adapter.add_claim(self.PROOF_ID, "c2", "b", event_id="e2")
         self.adapter.add_claim_dependency("c1", "c2", proof_id=self.PROOF_ID, event_id="e3")
 
-        # c1 -> c2 already exists; c2 -> c1 would close a cycle.
         self.assertTrue(self.adapter._would_create_cycle("c2", "c1", self.PROOF_ID))
 
 
