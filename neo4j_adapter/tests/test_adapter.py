@@ -81,7 +81,7 @@ class TestNeo4jAdapter(unittest.TestCase):
             self.PROOF_ID, "s1", status="closed", reason="proved", event_id="ev2"
         )
         state = self.adapter.get_state("s1", self.PROOF_ID)
-        self.assertEqual(state["status"], "formally-closed")  # Updated from "closed"
+        self.assertEqual(state["status"], "formally-closed")  
         self.assertEqual(state["closed_reason"], "proved")
 
     def test_update_state_status_rejects_invalid_status(self):
