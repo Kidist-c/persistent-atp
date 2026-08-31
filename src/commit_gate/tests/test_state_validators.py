@@ -1,6 +1,6 @@
 import unittest
 
-from commit_gate.ops import AddEdge, SetField, UpsertNode
+from commit_gate.ops import AddEdge, RemoveEdge, SetField, UpsertNode
 from commit_gate.proposal import Proposal
 from commit_gate.reasons import Reason
 from commit_gate.state import MemoryView
@@ -90,6 +90,227 @@ class TestStateValidators(unittest.TestCase):
             AddEdge("RAISED_OBSTRUCTION", "p1/run1", "p1/obs1", "p1/e1")
         )
         self.assertEqual(self.validate(proposal), [])
+
+
+    def test_remove_edge_unknown(self):
+        proposal = propose(RemoveEdge("HAS_TACTIC", "p1/e-nope"))
+        self.assertIn(Reason.UNKNOWN_EDGE, self.validate(proposal))
+
+    def test_remove_edge_committed(self):
+        self.view.add_edge("HAS_TACTIC", "p1/fs1", "p1/ta1", "p1/e1")
+        proposal = propose(RemoveEdge("HAS_TACTIC", "p1/e1"))
+        self.assertEqual(self.validate(proposal), [])
+
+    def test_remove_edge_rel_type_mismatch(self):
+        # MORK removes by exact bytes, so a wrong rel would match nothing and
+        # still report OK, leaving the edge live while the journal says gone.
+        self.view.add_edge("HAS_TACTIC", "p1/fs1", "p1/ta1", "p1/e1")
+        proposal = propose(RemoveEdge("CITES", "p1/e1"))
+        self.assertIn(Reason.UNKNOWN_EDGE, self.validate(proposal))
+
+    def test_remove_edge_added_in_the_same_proposal(self):
+        self.view.add_node("p1/fs1", "FormalState", {})
+        self.view.add_node("p1/ta1", "TacticApplication", {})
+        proposal = propose(
+            AddEdge("HAS_TACTIC", "p1/fs1", "p1/ta1", "p1/e1"),
+            RemoveEdge("HAS_TACTIC", "p1/e1"),
+        )
+        self.assertEqual(self.validate(proposal), [])
+
+    def test_remove_edge_twice_in_one_proposal(self):
+        self.view.add_edge("HAS_TACTIC", "p1/fs1", "p1/ta1", "p1/e1")
+        proposal = propose(
+            RemoveEdge("HAS_TACTIC", "p1/e1"),
+            RemoveEdge("HAS_TACTIC", "p1/e1"),
+        )
+        self.assertIn(Reason.UNKNOWN_EDGE, self.validate(proposal))
+
+
+        # --- Test for Soundness Gates
+class TestSoundnessGates(unittest.TestCase):
+    """ replay, self-certification, and alignment gates."""
+
+    def setUp(self):
+        self.view = MemoryView()
+        self.view.add_node("p1/claim1", "Claim", {"status": "formally-closed"})
+
+    def validate(self, proposal: Proposal) -> list[Reason]:
+        findings = validate_proposal(proposal, self.view)
+        return [f.reason for f in findings]
+
+    def _promote_claim(self):
+        return SetField("Claim", "p1/claim1", "status", "lean-verified", prior="formally-closed")
+
+    # -- check_replay_evidence ------------------------------------------
+
+    def test_promotion_without_any_replay_is_rejected(self):
+        proposal = propose(self._promote_claim())
+        self.assertIn(Reason.PROMOTION_WITHOUT_REPLAY, self.validate(proposal))
+
+    def test_promotion_with_rejected_replay_is_still_rejected(self):
+        self.view.add_node("p1/cert1", "Certificate", {"actor": "producer"})
+        self.view.add_node("p1/replay1", "LeanReplay", {"actor": "checker", "status": "rejected", "sorry_detected": False})
+        self.view.add_edge("PROVED_BY", "p1/claim1", "p1/cert1", "p1/e1")
+        self.view.add_edge("REPLAYED_BY", "p1/cert1", "p1/replay1", "p1/e2")
+
+        proposal = propose(self._promote_claim())
+        self.assertIn(Reason.PROMOTION_WITHOUT_REPLAY, self.validate(proposal))
+
+    def test_promotion_with_sorry_detected_is_still_rejected(self):
+        self.view.add_node("p1/cert1", "Certificate", {"actor": "producer"})
+        self.view.add_node("p1/replay1", "LeanReplay", {"actor": "checker", "status": "verified", "sorry_detected": True})
+        self.view.add_edge("PROVED_BY", "p1/claim1", "p1/cert1", "p1/e1")
+        self.view.add_edge("REPLAYED_BY", "p1/cert1", "p1/replay1", "p1/e2")
+
+        proposal = propose(self._promote_claim())
+        self.assertIn(Reason.PROMOTION_WITHOUT_REPLAY, self.validate(proposal))
+
+    def test_promotion_with_verified_sorry_free_replay_passes_this_gate(self):
+        self.view.add_node("p1/cert1", "Certificate", {"actor": "producer"})
+        self.view.add_node("p1/replay1", "LeanReplay", {"actor": "checker", "status": "verified", "sorry_detected": False})
+        self.view.add_edge("PROVED_BY", "p1/claim1", "p1/cert1", "p1/e1")
+        self.view.add_edge("REPLAYED_BY", "p1/cert1", "p1/replay1", "p1/e2")
+
+        proposal = propose(self._promote_claim())
+        self.assertNotIn(Reason.PROMOTION_WITHOUT_REPLAY, self.validate(proposal))
+
+    # -- check_self_certification -----------------------------------------
+
+    def test_self_certified_replay_is_rejected(self):
+        self.view.add_node("p1/cert1", "Certificate", {"actor": "same-person"})
+        proposal = propose(
+            UpsertNode("LeanReplay", "p1/replay1", {"actor": "same-person", "status": "verified", "sorry_detected": False}),
+            AddEdge("REPLAYED_BY", "p1/cert1", "p1/replay1", "p1/e1"),
+        )
+        self.assertIn(Reason.SELF_CERTIFICATION, self.validate(proposal))
+
+    def test_independent_replay_actor_is_not_self_certification(self):
+        self.view.add_node("p1/cert1", "Certificate", {"actor": "producer"})
+        proposal = propose(
+            UpsertNode("LeanReplay", "p1/replay1", {"actor": "different-person", "status": "verified", "sorry_detected": False}),
+            AddEdge("REPLAYED_BY", "p1/cert1", "p1/replay1", "p1/e1"),
+        )
+        self.assertNotIn(Reason.SELF_CERTIFICATION, self.validate(proposal))
+
+    # -- check_alignment_gate --------------------------------------------
+
+    def test_promotion_without_any_alignment_is_rejected(self):
+        proposal = propose(self._promote_claim())
+        self.assertIn(Reason.PROMOTION_WITHOUT_ALIGNMENT, self.validate(proposal))
+
+    def test_promotion_with_unreviewed_alignment_is_still_rejected(self):
+        self.view.add_node("p1/align1", "Alignment", {"lifecycle": "draft", "verdict": "aligned"})
+        self.view.add_edge("ALIGNS_CLAIM", "p1/align1", "p1/claim1", "p1/e1")
+
+        proposal = propose(self._promote_claim())
+        self.assertIn(Reason.PROMOTION_WITHOUT_ALIGNMENT, self.validate(proposal))
+
+    def test_promotion_with_reviewed_but_mismatched_alignment_is_still_rejected(self):
+        self.view.add_node("p1/align1", "Alignment", {"lifecycle": "reviewed", "verdict": "mismatch"})
+        self.view.add_edge("ALIGNS_CLAIM", "p1/align1", "p1/claim1", "p1/e1")
+
+        proposal = propose(self._promote_claim())
+        self.assertIn(Reason.PROMOTION_WITHOUT_ALIGNMENT, self.validate(proposal))
+
+    def test_promotion_with_reviewed_aligned_alignment_passes_this_gate(self):
+        self.view.add_node("p1/align1", "Alignment", {"lifecycle": "reviewed", "verdict": "aligned"})
+        self.view.add_edge("ALIGNS_CLAIM", "p1/align1", "p1/claim1", "p1/e1")
+
+        proposal = propose(self._promote_claim())
+        self.assertNotIn(Reason.PROMOTION_WITHOUT_ALIGNMENT, self.validate(proposal))
+
+    # -- full green path ----------------------------------------------------
+
+    def test_promotion_with_all_three_gates_satisfied_is_clean(self):
+        self.view.add_node("p1/cert1", "Certificate", {"actor": "producer"})
+        self.view.add_node("p1/replay1", "LeanReplay", {"actor": "checker", "status": "verified", "sorry_detected": False})
+        self.view.add_edge("PROVED_BY", "p1/claim1", "p1/cert1", "p1/e1")
+        self.view.add_edge("REPLAYED_BY", "p1/cert1", "p1/replay1", "p1/e2")
+        self.view.add_node("p1/align1", "Alignment", {"lifecycle": "reviewed", "verdict": "aligned"})
+        self.view.add_edge("ALIGNS_CLAIM", "p1/align1", "p1/claim1", "p1/e3")
+
+        proposal = propose(self._promote_claim())
+        self.assertEqual(self.validate(proposal), [])
+
+
+ # -- test for: re-upsert cannot launder committed state, and
+    #    self-certification is caught even across two proposals ------------
+ 
+    def test_re_upsert_cannot_launder_a_rejected_committed_replay(self):
+        """apply_ops drops a re-upsert of an already-committed node -- it is
+        identity confirmation, never a mutation. The validator must read the
+        committed fields, not whatever the proposal's UpsertNode claims."""
+        self.view.add_node("p1/cert1", "Certificate", {"actor": "producer"})
+        self.view.add_node(
+            "p1/replay1",
+            "LeanReplay",
+            {"actor": "checker", "status": "rejected", "sorry_detected": True},
+        )
+        self.view.add_edge("PROVED_BY", "p1/claim1", "p1/cert1", "p1/e1")
+        self.view.add_edge("REPLAYED_BY", "p1/cert1", "p1/replay1", "p1/e2")
+ 
+        proposal = propose(
+            UpsertNode(
+                "LeanReplay",
+                "p1/replay1",
+                {"actor": "checker", "status": "verified", "sorry_detected": False},
+            ),
+            self._promote_claim(),
+        )
+        self.assertIn(Reason.PROMOTION_WITHOUT_REPLAY, self.validate(proposal))
+ 
+    def test_self_certification_across_two_proposals_is_rejected(self):
+        """The replay was created and linked to its certificate in an earlier,
+        already-committed proposal. A later proposal only promotes the claim
+        -- the gate must still catch that the replay was self-certified."""
+        self.view.add_node("p1/cert1", "Certificate", {"actor": "same-person"})
+        self.view.add_node(
+            "p1/replay1",
+            "LeanReplay",
+            {"actor": "same-person", "status": "verified", "sorry_detected": False},
+        )
+        self.view.add_edge("PROVED_BY", "p1/claim1", "p1/cert1", "p1/e1")
+        self.view.add_edge("REPLAYED_BY", "p1/cert1", "p1/replay1", "p1/e2")
+ 
+        proposal = propose(self._promote_claim())
+        self.assertIn(Reason.PROMOTION_WITHOUT_REPLAY, self.validate(proposal))
+ 
+    def test_self_certified_link_made_in_a_later_proposal_is_rejected(self):
+        """The replay node already exists (committed, independently); a later
+        proposal only adds the REPLAYED_BY edge linking it to the certificate.
+        check_self_certification must trigger on that edge, not just on a
+        same-proposal LeanReplay upsert, and must produce the specific
+        SELF_CERTIFICATION reason at the point the link is made."""
+        self.view.add_node("p1/cert1", "Certificate", {"actor": "same-person"})
+        self.view.add_node(
+            "p1/replay1",
+            "LeanReplay",
+            {"actor": "same-person", "status": "verified", "sorry_detected": False},
+        )
+        self.view.add_edge("PROVED_BY", "p1/claim1", "p1/cert1", "p1/e1")
+ 
+        proposal = propose(AddEdge("REPLAYED_BY", "p1/cert1", "p1/replay1", "p1/e2"))
+        self.assertIn(Reason.SELF_CERTIFICATION, self.validate(proposal))
+    def test_actorless_certificate_cannot_launder_a_self_report(self):
+        """A Certificate with no `actor` recorded must not be treated as
+        'provably a different actor' from the replay. Missing evidence is
+        insufficient evidence, not proof of independence -- promotion must
+        stay blocked, even with a satisfied alignment record."""
+        self.view.add_node("p1/cert1", "Certificate", {})  # no actor at all
+        self.view.add_node(
+            "p1/replay1",
+            "LeanReplay",
+            {"actor": "same-person", "status": "verified", "sorry_detected": False},
+        )
+        self.view.add_edge("PROVED_BY", "p1/claim1", "p1/cert1", "p1/e1")
+        self.view.add_edge("REPLAYED_BY", "p1/cert1", "p1/replay1", "p1/e2")
+        self.view.add_node("p1/align1", "Alignment", {"lifecycle": "reviewed", "verdict": "aligned"})
+        self.view.add_edge("ALIGNS_CLAIM", "p1/align1", "p1/claim1", "p1/e3")
+ 
+        proposal = propose(self._promote_claim())
+        self.assertIn(Reason.PROMOTION_WITHOUT_REPLAY, self.validate(proposal))
+ 
+
 
 if __name__ == "__main__":
     unittest.main()
