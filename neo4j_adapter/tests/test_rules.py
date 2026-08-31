@@ -1,0 +1,160 @@
+
+import unittest
+from neo4j_adapter.adapter import Neo4jAdapter
+from neo4j_adapter.constants import (
+    STATE_CLOSED, STATE_TAINTED, STATE_REOPENED, STATE_KIND_OR,
+    MOVE_CLOSED, MOVE_OPEN, MOVE_LEASED, MOVE_REFUTED,
+    
+)
+
+
+class TestRules(unittest.TestCase):
+    PROOF_ID = "test-proof-rules"
+
+    def setUp(self):
+        self.adapter = Neo4jAdapter()
+        self.adapter.init_proof(self.PROOF_ID, "test kernel", event_id="ev0")
+
+    def tearDown(self):
+        with self.adapter._driver.session() as s:
+            s.run("MATCH (n {proof_id: $pid}) DETACH DELETE n", pid=self.PROOF_ID)
+        self.adapter.close()
+
+    # -- OR rule ------------------------------------------------------
+
+    def test_state_is_solved_true_when_a_proposed_move_is_closed(self):
+        self.adapter.add_state(self.PROOF_ID, "s1", "goal", event_id="e1")
+        self.adapter.add_move(self.PROOF_ID, "m1", "s1", "try X", event_id="e2")
+        self.adapter.update_move_status("m1", MOVE_CLOSED, proof_id=self.PROOF_ID, event_id="e3")
+
+        self.assertTrue(self.adapter.state_is_solved(self.PROOF_ID, "s1"))
+
+    def test_state_is_solved_false_when_no_move_closed(self):
+        self.adapter.add_state(self.PROOF_ID, "s1", "goal", event_id="e1")
+        self.adapter.add_move(self.PROOF_ID, "m1", "s1", "try X", event_id="e2")
+
+        self.assertFalse(self.adapter.state_is_solved(self.PROOF_ID, "s1"))
+
+    # -- AND rule -------------------------------------------------------
+
+    def test_move_is_complete_true_when_all_subgoals_closed(self):
+        self.adapter.add_state(self.PROOF_ID, "s1", "goal", event_id="e1")
+        self.adapter.add_move(self.PROOF_ID, "m1", "s1", "split", event_id="e2")
+        self.adapter.add_required_subgoal(self.PROOF_ID, "m1", "sg1", "case 1", event_id="e3")
+        self.adapter.update_state_status(self.PROOF_ID, "sg1", STATE_CLOSED, event_id="e4")
+
+        self.assertTrue(self.adapter.move_is_complete(self.PROOF_ID, "m1"))
+
+    def test_move_is_complete_false_with_an_open_subgoal(self):
+        self.adapter.add_state(self.PROOF_ID, "s1", "goal", event_id="e1")
+        self.adapter.add_move(self.PROOF_ID, "m1", "s1", "split", event_id="e2")
+        self.adapter.add_required_subgoal(self.PROOF_ID, "m1", "sg1", "case 1", event_id="e3")
+
+        self.assertFalse(self.adapter.move_is_complete(self.PROOF_ID, "m1"))
+
+    # -- close_state cascade (AND then OR to fixpoint) -------------------
+
+    def test_close_state_cascades_through_and_then_or(self):
+        """root --PROPOSES--> m1 --REQUIRES--> sg1
+
+        Closing sg1 directly should: close m1 (AND, its only subgoal is
+        closed) -> close root (OR, its only move is now closed).
+        """
+        self.adapter.add_state(self.PROOF_ID, "root", "root goal", event_id="e1")
+        self.adapter.add_move(self.PROOF_ID, "m1", "root", "split", event_id="e2")
+        self.adapter.add_required_subgoal(self.PROOF_ID, "m1", "sg1", "case 1", event_id="e3")
+
+        self.adapter.close_state("sg1", self.PROOF_ID, reason="proved", event_id="e4")
+
+        m1 = self.adapter.get_moves_for_state("root", self.PROOF_ID)[0]
+        self.assertEqual(m1["status"], MOVE_CLOSED)
+
+        root = self.adapter.get_state("root", self.PROOF_ID)
+        self.assertEqual(root["status"], STATE_CLOSED)
+
+    # -- taint propagation ------------------------------------------------
+
+    def test_propagate_taint_refutes_taints_and_reopens(self):
+        """c2 DEPENDS_ON c1; s1 USES_CLAIM c2 and is closed.
+
+        Refuting c1 should taint c2 (transitive dependent) and reopen s1
+        (it was closed while depending on a now-tainted claim).
+        """
+        self.adapter.add_claim(self.PROOF_ID, "c1", "base claim", event_id="e1")
+        self.adapter.add_claim(self.PROOF_ID, "c2", "dependent claim", event_id="e2")
+        self.adapter.add_claim_dependency("c2", "c1", proof_id=self.PROOF_ID, event_id="e3")
+
+        self.adapter.add_state(self.PROOF_ID, "s1", "goal", event_id="e4")
+        self.adapter.link_state_claim(self.PROOF_ID, "s1", "c2", event_id="e5")
+        self.adapter.update_state_status(self.PROOF_ID, "s1", STATE_CLOSED, event_id="e6")
+
+        result = self.adapter.propagate_taint(self.PROOF_ID, "c1", event_id="e7", reason="counterexample found")
+
+        self.assertIn("c2", result["tainted"])
+        self.assertIn("s1", result["reopened_states"])
+
+        c1 = next(c for c in self.adapter.get_all_claims(self.PROOF_ID) if c["id"] == "c1")
+        self.assertEqual(c1["status"], "refuted")
+
+        s1 = self.adapter.get_state("s1", self.PROOF_ID)
+        self.assertEqual(s1["status"], STATE_REOPENED)
+
+    def test_taint_cone_returns_transitive_dependents(self):
+        self.adapter.add_claim(self.PROOF_ID, "c1", "base", event_id="e1")
+        self.adapter.add_claim(self.PROOF_ID, "c2", "mid", event_id="e2")
+        self.adapter.add_claim(self.PROOF_ID, "c3", "top", event_id="e3")
+        self.adapter.add_claim_dependency("c2", "c1", proof_id=self.PROOF_ID, event_id="e4")
+        self.adapter.add_claim_dependency("c3", "c2", proof_id=self.PROOF_ID, event_id="e5")
+
+        cone = self.adapter.taint_cone(self.PROOF_ID, "c1")
+        self.assertCountEqual(cone, ["c2", "c3"])
+
+    # -- eligible_frontier -------------------------------------------------
+
+    def test_eligible_frontier_excludes_leased_refuted_dominated_exhausted(self):
+        self.adapter.add_state(self.PROOF_ID, "s1", "goal", event_id="e1")
+        self.adapter.add_move(self.PROOF_ID, "m_open", "s1", "open move", event_id="e2", status=MOVE_OPEN)
+        self.adapter.add_move(self.PROOF_ID, "m_leased", "s1", "leased move", event_id="e3", status=MOVE_OPEN)
+        self.adapter.update_move_status("m_leased", MOVE_LEASED, proof_id=self.PROOF_ID, event_id="e4")
+        self.adapter.add_move(self.PROOF_ID, "m_refuted", "s1", "refuted move", event_id="e5", status=MOVE_OPEN)
+        self.adapter.update_move_status("m_refuted", MOVE_REFUTED, proof_id=self.PROOF_ID, event_id="e6")
+
+        frontier_ids = [m["id"] for m in self.adapter.eligible_frontier(self.PROOF_ID)]
+        self.assertIn("m_open", frontier_ids)
+        self.assertNotIn("m_leased", frontier_ids)
+        self.assertNotIn("m_refuted", frontier_ids)
+
+    def test_eligible_frontier_excludes_moves_on_tainted_or_closed_states(self):
+        self.adapter.add_state(self.PROOF_ID, "s_open", "goal", event_id="e1")
+        self.adapter.add_move(self.PROOF_ID, "m1", "s_open", "move", event_id="e2", status=MOVE_OPEN)
+
+        self.adapter.add_state(self.PROOF_ID, "s_tainted", "goal2", event_id="e3")
+        self.adapter.add_move(self.PROOF_ID, "m2", "s_tainted", "move2", event_id="e4", status=MOVE_OPEN)
+        self.adapter.update_state_status(self.PROOF_ID, "s_tainted", STATE_TAINTED, event_id="e5")
+
+        frontier_ids = [m["id"] for m in self.adapter.eligible_frontier(self.PROOF_ID)]
+        self.assertIn("m1", frontier_ids)
+        self.assertNotIn("m2", frontier_ids)
+
+    # -- cycle detection --------------------------------------------------
+
+    def test_would_create_cycle_false_for_acyclic_dependency(self):
+        self.adapter.add_claim(self.PROOF_ID, "c1", "a", event_id="e1")
+        self.adapter.add_claim(self.PROOF_ID, "c2", "b", event_id="e2")
+        self.adapter.add_claim_dependency("c1", "c2", proof_id=self.PROOF_ID, event_id="e3")
+
+        self.assertFalse(
+            self.adapter._would_create_cycle("c2", "c3", self.PROOF_ID)  # c3 doesn't even exist -- no path
+        )
+
+    def test_would_create_cycle_true_when_reverse_edge_exists(self):
+        self.adapter.add_claim(self.PROOF_ID, "c1", "a", event_id="e1")
+        self.adapter.add_claim(self.PROOF_ID, "c2", "b", event_id="e2")
+        self.adapter.add_claim_dependency("c1", "c2", proof_id=self.PROOF_ID, event_id="e3")
+
+        # c1 -> c2 already exists; c2 -> c1 would close a cycle.
+        self.assertTrue(self.adapter._would_create_cycle("c2", "c1", self.PROOF_ID))
+
+
+if __name__ == "__main__":
+    unittest.main()
