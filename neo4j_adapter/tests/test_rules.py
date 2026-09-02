@@ -48,6 +48,14 @@ class TestRules(unittest.TestCase):
         self.adapter.add_state(self.PROOF_ID, "s1", "goal", event_id="e1")
         self.adapter.add_move(self.PROOF_ID, "m1", "s1", "split", event_id="e2")
         self.adapter.add_required_subgoal(self.PROOF_ID, "m1", "sg1", "case 1", event_id="e3")
+        self.assertFalse(self.adapter.move_is_complete(self.PROOF_ID, "m1"))
+        
+    def test_move_is_complete_treats_reopened_subgoal_as_still_open(self):
+        self.adapter.add_state(self.PROOF_ID, "s1", "goal", event_id="e1")
+        self.adapter.add_move(self.PROOF_ID, "m1", "s1", "split", event_id="e2")
+        self.adapter.add_required_subgoal(self.PROOF_ID, "m1", "sg1", "case 1", event_id="e3")
+        self.adapter.update_state_status(self.PROOF_ID, "sg1", STATE_CLOSED, event_id="e4")
+        self.adapter.reopen_state(self.PROOF_ID, "sg1", reason="counterexample", event_id="e5")
 
         self.assertFalse(self.adapter.move_is_complete(self.PROOF_ID, "m1"))
 
