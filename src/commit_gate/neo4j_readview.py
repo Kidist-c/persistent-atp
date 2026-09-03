@@ -21,23 +21,25 @@ from .state import EdgeRecord, NodeRecord
 
 load_dotenv()
 
-__all__ = ["Neo4jReadView", "GraphUnavailable", "GraphQueryError"]
 
-
-class GraphUnavailable(Exception):
-    """The Neo4j server could not be reached, or auth/config was rejected."""
-
-
-class GraphQueryError(Exception):
-    """A query failed for a reason other than unavailability."""
-
-
+__all__ = ["Neo4jReadView", "ReadViewUnavailable", "ReadViewQueryError"]
+ 
+ 
+class ReadViewUnavailable(Exception):
+    """The graph backing this ReadView could not be reached, or auth/config was rejected."""
+ 
+ 
+class ReadViewQueryError(Exception):
+    """A query against this ReadView's backing graph failed for a reason other than unavailability."""
+ 
+ 
 def _translate(operation: str, exc: BaseException) -> BaseException:
     if isinstance(exc, (ServiceUnavailable, SessionExpired, AuthError, ConfigurationError)):
-        return GraphUnavailable(f"{operation}: {exc}")
+        return ReadViewUnavailable(f"{operation}: {exc}")
     if isinstance(exc, (Neo4jError, DriverError)):
-        return GraphQueryError(f"{operation}: {exc}")
+        return ReadViewQueryError(f"{operation}: {exc}")
     return exc
+
 
 
 class Neo4jReadView:
