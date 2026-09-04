@@ -180,15 +180,47 @@ def test_the_same_edge_id_is_allowed_on_a_different_relationship_type(driver, pr
 # ---------------------------------------------------------------------------
 
 
-def test_find_bad_edge_endpoints_returns_empty_on_a_correct_graph(driver, prefix: str):
-    claim, cert = f"{prefix}/claim1", f"{prefix}/cert1"
-    _write_node(driver, claim, "Claim")
-    _write_node(driver, cert, "Certificate")
-    _write_edge_raw(driver, claim, cert, "PROVED_BY", f"{prefix}/e1")
+def test_find_bad_edge_endpoints_returns_empty_on_a_realistic_proof_graph(driver, prefix: str):
+    """A thin, one-edge fixture is easy to accidentally get right by luck.
+    This exercises a representative slice of a real proof graph -- ten
+    different relationship types across the soundness-gate and formal-
+    search schemas -- and confirms none of them are flagged."""
+    nodes = {
+        "claim1": "Claim",
+        "claim2": "Claim",
+        "cert1": "Certificate",
+        "replay1": "LeanReplay",
+        "decl1": "FormalDeclaration",
+        "align1": "Alignment",
+        "run1": "FormalRun",
+        "root_state": "FormalState",
+        "child_state": "FormalState",
+        "tactic1": "TacticApplication",
+    }
+    for key, label in nodes.items():
+        _write_node(driver, f"{prefix}/{key}", label)
+
+    edges = [
+        ("PROVED_BY", "claim1", "cert1"),
+        ("REPLAYED_BY", "cert1", "replay1"),
+        ("CERTIFIES", "cert1", "decl1"),
+        ("ALIGNS_CLAIM", "align1", "claim1"),
+        ("DEPENDS_ON", "claim1", "claim2"),
+        ("PRODUCED_CERTIFICATE", "run1", "cert1"),
+        ("SEARCHES", "run1", "decl1"),
+        ("HAS_ROOT", "run1", "root_state"),
+        ("HAS_TACTIC", "root_state", "tactic1"),
+        ("CLOSES_STATE", "tactic1", "child_state"),
+    ]
+    for i, (rel_type, src_key, dst_key) in enumerate(edges):
+        _write_edge_raw(driver, f"{prefix}/{src_key}", f"{prefix}/{dst_key}", rel_type, f"{prefix}/e{i}")
 
     violations = find_bad_edge_endpoints(driver)
 
-    assert not any(v["edge_id"] == f"{prefix}/e1" for v in violations)
+    prefixed_violations = [v for v in violations if v["edge_id"].startswith(prefix)]
+    assert prefixed_violations == [], (
+        f"expected zero violations on a valid {len(edges)}-edge fixture, got: {prefixed_violations}"
+    )
 
 
 def test_find_bad_edge_endpoints_detects_a_wrong_source_label(driver, prefix: str):
