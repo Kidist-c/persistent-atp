@@ -1,7 +1,5 @@
 """Integration tests for neo4j_schema.py, against a REAL Neo4j server.
 
-Same gating convention as the other Neo4j integration test files:
-
     RUN_NEO4J_INTEGRATION_TESTS=1 pytest commit_gate/tests/test_neo4j_schema.py
 
 Two things are tested, deliberately kept apart (see neo4j_schema.py's
