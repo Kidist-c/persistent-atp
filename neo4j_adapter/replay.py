@@ -13,11 +13,17 @@ class ReplayMixin:
     """
 
     def wipe_and_rebuild(self, proof_id: str, events: List[Dict[str, Any]]) -> None:
-        with self._driver.session() as s:
-            s.run(
-                "MATCH (n) WHERE n.proof_id = $pid DETACH DELETE n",
-                pid=proof_id,
-            )
+        """Delete the proof's projection and replay the journal into it.
+
+        Deliberately *not* one transaction: a full replay can be arbitrarily
+        large, and the journal — not the graph — is the durability authority, so
+        an interrupted rebuild is recovered by rebuilding again rather than by
+        rollback. Each individual event is still applied atomically.
+        """
+        self._write_all(
+            "wipe_and_rebuild",
+            [("MATCH (n) WHERE n.proof_id = $pid DETACH DELETE n", {"pid": proof_id})],
+        )
         for event in events:
             self._replay_event(proof_id, event)
 
