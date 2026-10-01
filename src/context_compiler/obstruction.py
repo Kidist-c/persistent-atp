@@ -864,7 +864,7 @@ def _hypothesis_for_kind(kind: ObstructionKind) -> str:
 def _derive_questions(
     *,
     kind: ObstructionKind,
-    selected: Sequence[FailedState],
+    selected: Sequence[ObservedFailure],
     repeated_failure_family: str | None,
     environment_hash: str,
     supplied: Sequence[str],
@@ -874,15 +874,35 @@ def _derive_questions(
         _require_str("research_question", question)
         if question not in questions:
             questions.append(question)
-    if selected:
+    for failure in selected:
         template = _QUESTION_BY_KIND[kind]
-        question = template.format(state_id=selected[0].state_id)
+        evidence: list[str] = [f"target={failure.target!r}"]
+        if failure.hypotheses:
+            evidence.append(f"hypotheses={'; '.join(failure.hypotheses)!r}")
+        if failure.attempts:
+            attempts = ", ".join(
+                attempt.tactic_family
+                + (f" with {', '.join(attempt.premises)}" if attempt.premises else "")
+                for attempt in failure.attempts
+            )
+            evidence.append(f"attempts={attempts!r}")
+        if failure.diagnostics:
+            diagnostics = "; ".join(
+                diagnostic.text for diagnostic in failure.diagnostics
+            )
+            evidence.append(f"diagnostics={diagnostics!r}")
+        question = (
+            f"{template.format(state_id=failure.state_id)} "
+            f"Use the recorded evidence ({'; '.join(evidence)})."
+        )
         if question not in questions:
             questions.append(question)
     if repeated_failure_family:
+        states = ", ".join(failure.state_id for failure in selected)
         question = (
-            f"Is the symbol behind failure family {repeated_failure_family!r} "
-            f"available in environment {environment_hash}?"
+            f"Across states {states}, how should the repeated failure family "
+            f"{repeated_failure_family!r} be resolved in environment "
+            f"{environment_hash}, given the recorded targets and diagnostics?"
         )
         if question not in questions:
             questions.append(question)
@@ -1190,7 +1210,7 @@ def compile_obstruction(
     )
     questions = _derive_questions(
         kind=kind,
-        selected=selected,
+        selected=observed,
         repeated_failure_family=repeated_family,
         environment_hash=env_hash,
         supplied=research_questions,

@@ -341,6 +341,9 @@ def test_research_questions_include_supplied_and_derived():
 
     assert questions[0] == supplied
     assert any("p1/fs-10" in question for question in questions)
+    assert any(TARGET_10 in question for question in questions)
+    assert any("Finset.sum_range_succ" in question for question in questions)
+    assert any("unknown identifier: Finset.sum_range_succ" in question for question in questions)
     assert any("unknown-identifier" in question for question in questions)
     assert len(set(questions)) == len(questions)
     for question in questions:
