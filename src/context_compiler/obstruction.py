@@ -750,6 +750,14 @@ def _select_states(
 
     ranked: list[tuple[int, int, int, str, FailedState]] = []
     for state in records.states:
+        if (
+            state.status in {
+                FormalStateStatus.FORMALLY_CLOSED,
+                FormalStateStatus.TAINTED,
+            }
+            and state.state_id not in named
+        ):
+            continue
         failures = failing.get(state.state_id, [])
         if not failures and state.state_id not in named:
             continue

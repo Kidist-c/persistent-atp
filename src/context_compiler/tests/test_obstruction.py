@@ -270,13 +270,57 @@ def test_selection_keeps_a_small_set_and_dedupes():
     selected = compilation.payload.selected_state_ids
     assert selected[0] == "p1/fs-10"
     assert "p1/fs-14" not in selected
-    assert set(selected) == {"p1/fs-10", "p1/fs-11", "p1/fs-12", "p1/fs-13"}
-    assert len(selected) == 4
+    assert set(selected) == {"p1/fs-10", "p1/fs-11", "p1/fs-12"}
+    assert len(selected) == 3
 
     capped = compile_obstruction(
         case.request, case.bundle, case.reader, max_failed_states=2
     )
     assert capped.payload.selected_state_ids == ("p1/fs-10", "p1/fs-11")
+
+
+def test_closed_and_tainted_states_require_recorded_obstruction_names():
+    entries = default_entries()
+    for source_type, source_id, body in entries:
+        if source_id == "p1/fs-12":
+            body["status"] = "formally-closed"
+        if source_id == "p1/obs-2":
+            body["formal_state_ids"] = ["p1/fs-10"]
+
+    bundle, artifacts = make_bundle(entries)
+    request = make_request()
+    compilation = compile_obstruction(
+        request, bundle, MappingArtifactReader(artifacts), max_failed_states=4
+    )
+
+    assert compilation.payload.selected_state_ids == ("p1/fs-10", "p1/fs-11")
+    selected_attempts = {
+        attempt.attempt_id
+        for failure in compilation.payload.observed
+        for attempt in failure.attempts
+    }
+    assert "p1/ta-8" not in selected_attempts
+    assert "p1/ta-9" not in selected_attempts
+
+    for source_type, source_id, body in entries:
+        if source_id == "p1/obs-2":
+            body["formal_state_ids"] = [
+                "p1/fs-10",
+                "p1/fs-12",
+                "p1/fs-13",
+            ]
+
+    bundle, artifacts = make_bundle(entries)
+    named = compile_obstruction(
+        request, bundle, MappingArtifactReader(artifacts), max_failed_states=4
+    )
+
+    assert set(named.payload.selected_state_ids) == {
+        "p1/fs-10",
+        "p1/fs-11",
+        "p1/fs-12",
+        "p1/fs-13",
+    }
 
 
 def test_exact_local_context_is_preserved_verbatim():
