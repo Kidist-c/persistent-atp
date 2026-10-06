@@ -1,4 +1,4 @@
-"""Research context compiler (issue #52).
+"""Research context compiler 
 
 ``compile_research`` turns a selected research task and a ``SourceBundle`` into
 one rendered ``ContextPacket`` inside the worker's text budget, plus a manifest
@@ -51,7 +51,6 @@ CLAIM_TYPE = "claim"
 DEFAULT_SUPPORT_CATEGORIES: Mapping[str, str] = {
     "attempt": "failure",
     "obstruction": "failure",
-    "critique": "feedback",
     CLAIM_TYPE: "lemma",
     MOVE_TYPE: "alternative",
 }
@@ -90,9 +89,6 @@ _FRONTIER_MOVES = frozenset(
 
 class ArtifactReader(Protocol):
     """Read-only access to complete source artifacts by ``source_id``.
-
-    Same shape as ``obstruction.ArtifactReader`` so one reader serves both
-    compilers; it should move to a shared module once #58 lands.
     """
 
     def fetch(self, source_id: str) -> Mapping[str, object]: ...
@@ -186,7 +182,7 @@ def _load(ref: SourceRef, reader: ArtifactReader) -> _Source:
     if not isinstance(status, str) or not status.strip():
         raise ContextValidationError(f"{ref.source_id}: body needs a status")
     text = ""
-    for field in ("statement", "summary", "detail", "description", "goal"):
+    for field in ("claim_text", "statement", "summary", "detail", "description", "goal"):
         candidate = body.get(field)
         if isinstance(candidate, str) and candidate.strip():
             text = candidate
@@ -202,6 +198,10 @@ def _load(ref: SourceRef, reader: ArtifactReader) -> _Source:
 
 def _fallback_text(ref: SourceRef, body: Mapping[str, object]) -> str:
     """Text for records whose committed fields carry no prose of their own."""
+    if ref.source_type == "attempt":
+        actor = body.get("actor") or "unknown actor"
+        role = body.get("worker_class") or "worker"
+        return f"Attempt by {actor} ({role}): {body.get('status')}."
     if ref.source_type == STATE_TYPE:
         origin = body.get("origin_state")
         if isinstance(origin, str) and origin.strip():
@@ -319,6 +319,8 @@ def compile_research(
             continue
         src = sources[ref.source_id]
         category = _support_category(ref.source_type, support_categories)
+        if ref.source_type == "attempt" and src.body.get("worker_class") == "critic":
+            category = "feedback"
         formal_ids = src.body.get("formal_state_ids")
         origin = active_state.body.get("origin_state")
         related = (

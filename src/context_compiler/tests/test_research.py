@@ -50,12 +50,12 @@ def make(extra=None, budget=2000):
         "c3": {"status": CLAIM_A, "statement": "Private lemma"},
         "f1": {"status": ATTEMPT, "summary": "Union bound saturates", "state_id": "s1"},
         "f2": {"status": ATTEMPT, "summary": "Unrelated failure", "state_id": "s9"},
-        "k1": {"status": ATTEMPT, "summary": "Critic: quantifier order unclear",
+        "k1": {"status": ATTEMPT, "actor": "critic-1", "worker_class": "critic",
                "move_id": "m1"},
     }
     types = {"s1": "research-state", "m1": "research-move", "m2": "research-move",
              "m3": "research-move", "c1": "claim", "c2": "claim", "c3": "claim",
-             "f1": "attempt", "f2": "attempt", "k1": "critique"}
+             "f1": "attempt", "f2": "attempt", "k1": "attempt"}
     bodies.update(extra or {})
     refs = tuple(ref(types.get(i) or (extra or {})[i]["_type"], i) for i in bodies)
     request = CompileRequest("task-1", "proof-1", 3, PacketKind.RESEARCH,
