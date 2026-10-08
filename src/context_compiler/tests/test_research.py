@@ -181,6 +181,17 @@ class ResearchCompilerTests(unittest.TestCase):
         extra = {"c1": {"status": "refuted", "statement": "Core lemma holds"}}
         with self.assertRaises(ContextValidationError):
             compile_research(*make(extra))
+    def test_selected_move_must_belong_to_active_state(self):
+        extra = {"m1": {"status": "leased", "detail": "x", "state_id": "s9",
+                        "required_claim_ids": ["c1"]}}
+        with self.assertRaises(ContextValidationError):
+            compile_research(*make(extra))
+
+    def test_selected_move_without_state_id_rejected(self):
+        extra = {"m1": {"status": "leased", "detail": "x",
+                        "required_claim_ids": ["c1"]}}
+        with self.assertRaises(ContextValidationError):
+            compile_research(*make(extra))
     def test_unselectable_selected_move_rejected(self):
         for status in ("closed", "refuted", "dominated", "exhausted", "stale"):
             extra = {"m1": {"status": status, "detail": "x", "state_id": "s1",

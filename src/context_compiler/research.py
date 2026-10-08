@@ -274,6 +274,12 @@ def compile_research(
     selected_move = sources.get(task.selected_move_id)
     if selected_move is None or selected_move.ref.source_type != MOVE_TYPE:
         raise ContextValidationError("selected move is not a research-move in the bundle")
+    
+    if selected_move.state_id != task.active_state_id:
+        raise ContextValidationError(
+            f"selected move {task.selected_move_id} belongs to state "
+            f"{selected_move.state_id!r}, not the active state {task.active_state_id}"
+        )
     if selected_move.status not in _SELECTABLE_MOVES:
         raise ContextValidationError(
             f"selected move {task.selected_move_id} is {selected_move.status}"
