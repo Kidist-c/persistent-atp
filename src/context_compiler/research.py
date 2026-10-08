@@ -85,7 +85,7 @@ _FAILED_ATTEMPTS = frozenset(
 _FRONTIER_MOVES = frozenset(
     {ResearchMoveStatus.QUEUED.value, ResearchMoveStatus.OPEN.value}
 )
-
+_SELECTABLE_MOVES = _FRONTIER_MOVES | {ResearchMoveStatus.LEASED.value}
 
 class ArtifactReader(Protocol):
     """Read-only access to complete source artifacts by ``source_id``.
@@ -274,7 +274,10 @@ def compile_research(
     selected_move = sources.get(task.selected_move_id)
     if selected_move is None or selected_move.ref.source_type != MOVE_TYPE:
         raise ContextValidationError("selected move is not a research-move in the bundle")
-
+    if selected_move.status not in _SELECTABLE_MOVES:
+        raise ContextValidationError(
+            f"selected move {task.selected_move_id} is {selected_move.status}"
+        )
     if active_state.status in _DEAD_STATES:
         raise ContextValidationError(
             f"active state {task.active_state_id} is {active_state.status}"

@@ -181,6 +181,21 @@ class ResearchCompilerTests(unittest.TestCase):
         extra = {"c1": {"status": "refuted", "statement": "Core lemma holds"}}
         with self.assertRaises(ContextValidationError):
             compile_research(*make(extra))
+    def test_unselectable_selected_move_rejected(self):
+        for status in ("closed", "refuted", "dominated", "exhausted", "stale"):
+            extra = {"m1": {"status": status, "detail": "x", "state_id": "s1",
+                            "required_claim_ids": ["c1"]}}
+            with self.subTest(status=status):
+                with self.assertRaises(ContextValidationError):
+                    compile_research(*make(extra))
+
+    def test_selectable_move_statuses_accepted(self):
+        for status in ("queued", "open", "leased"):
+            extra = {"m1": {"status": status, "detail": "x", "state_id": "s1",
+                            "required_claim_ids": ["c1"]}}
+            with self.subTest(status=status):
+                out = compile_research(*make(extra))
+                self.assertIn(f"Selected move m1 [{status}]", out.packet.content)
 
     def test_dead_active_state_rejected(self):
         extra = {"s1": {"status": "superseded", "goal": "g",
