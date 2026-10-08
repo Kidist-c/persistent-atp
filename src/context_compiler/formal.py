@@ -41,6 +41,7 @@ from shared.vocab import (
     EvidenceKind,
     FormalStateStatus,
     RunDisposition,
+    StateKind,
     values,
 )
 
@@ -469,9 +470,23 @@ def _load(ref: SourceRef, reader: ArtifactReader) -> _Source:
         status = _status(body)
         if status not in values(FormalStateStatus):
             raise ContextValidationError("status must be a formal state status")
-        _str_list("hypotheses", body.get("hypotheses"))
-        _require_str("target", body.get("target"))
+        
+        if body.get("environment_id") is not None:
+            _require_str("environment_id", body.get("environment_id"))
+            
         _require_sha256("exact_state_hash", body.get("exact_state_hash"))
+        _require_sha256("semantic_signature", body.get("semantic_signature"))
+        for optional_hash in ("context_digest", "environment_hash"):
+            if body.get(optional_hash) is not None:
+                _require_sha256(optional_hash, body.get(optional_hash))
+        if body.get("goal_text") is not None:
+            _require_str("goal_text", body.get("goal_text"))
+        if body.get("kind") is not None and body.get("kind") not in values(StateKind):
+            raise ContextValidationError("kind must be a state kind (or, and, goal)")
+        if body.get("serialization_version") is not None:
+            _require_positive("serialization_version", body.get("serialization_version"))
+        if body.get("is_theorem") is not None and not isinstance(body.get("is_theorem"), bool):
+            raise ContextValidationError("is_theorem must be a boolean")
     elif kind == PREMISE_TYPE:
         _require_str("lean_name", body.get("lean_name"))
         _premise_text(body)
@@ -562,6 +577,11 @@ def compile_formal(
         )
     environment = chosen[0]
     env_hash = _environment_hash(environment.body)
+    root_env = root.body.get("environment_hash")
+    if root_env is not None and root_env != env_hash:
+        raise ContextValidationError(
+            "root state was elaborated under a different environment than the pinned one"
+        )
 
     decide(declaration, True, "selected formal declaration")
     decide(root, True, "root state")
@@ -705,6 +725,28 @@ def compile_formal(
     # ---- payload ---------------------------------------------------------------
     limits = request.formal_limits
     root_body = root.body
+
+    # semantic_signature may only *propose* transpositions; it is carried for
+    # reference and never used to merge states.
+    root_state: dict[str, Any] = {
+        "state_id": root.ref.source_id,
+        "status": root.status,
+        "exact_state_hash": root_body["exact_state_hash"],
+        "semantic_signature": root_body["semantic_signature"],
+        "source_hash": root.ref.content_hash,
+    }
+    for optional_key in (
+        "goal_text",
+        "kind",
+        "context_digest",
+        "environment_id",
+        "environment_hash",
+        "serialization_version",
+        "is_theorem",
+    ):
+        if root_body.get(optional_key) is not None:
+            root_state[optional_key] = root_body[optional_key]
+
     payload = FormalRequestPayload(
         proof_id=request.proof_id,
         task_id=request.task_id,
@@ -723,14 +765,7 @@ def compile_formal(
         module_path=declaration.body.get("module_path"),
         declaration_hash=declaration.ref.content_hash,
         lean_source_artifact=source_artifact,
-        root_state={
-            "state_id": root.ref.source_id,
-            "status": root.status,
-            "hypotheses": list(_str_list("hypotheses", root_body.get("hypotheses"))),
-            "target": root_body["target"],
-            "exact_state_hash": root_body["exact_state_hash"],
-            "source_hash": root.ref.content_hash,
-        },
+        root_state=root_state,
         environment={
             "environment_id": environment.ref.source_id,
             "environment_hash": env_hash,

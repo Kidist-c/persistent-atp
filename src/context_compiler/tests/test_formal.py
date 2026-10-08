@@ -50,8 +50,10 @@ def base_bodies():
     return {
         DECL: {"declaration_id": DECL, "status": "searching", "lean_type": "∀ n, P n",
                "lean_value": "by sorry", "claim_id": f"{P}/c-1"},
-        ROOT: {"state_id": ROOT, "status": "open", "hypotheses": ["n : ℕ"],
-               "target": "P n", "exact_state_hash": h("root")},
+        ROOT: {"state_id": ROOT, "status": "open", "kind": "goal", "goal_text": "P n",
+             "context_digest": h("ctx"), "environment_hash": h("lake"),
+            "serialization_version": 1, "exact_state_hash": h("root"),
+            "semantic_signature": h("sem-root")},
         "env-1": {"toolchain": "leanprover/lean4:v4.9.0", "lake_manifest_hash": "ab12",
                   "mathlib_commit": "deadbeef", "environment_hash": h("lake")},
         "prem-v": {"lean_name": "Nat.add_comm", "statement": "a + b = b + a",
@@ -71,8 +73,9 @@ def base_bodies():
                       "disposition": "stagnated", "environment_hash": h("other")},
         "tr-1": {"from_state_id": f"{P}/fs-2", "to_state_id": ROOT, "accepted": True},
         "tr-2": {"from_state_id": f"{P}/fs-3", "to_state_id": ROOT, "accepted": False},
-        f"{P}/fs-5": {"state_id": f"{P}/fs-5", "status": "failed", "hypotheses": [],
-                      "target": "X", "exact_state_hash": h("other-state")},
+        f"{P}/fs-5": {"state_id": f"{P}/fs-5", "status": "failed",
+            "exact_state_hash": h("other-state"),
+            "semantic_signature": h("sem-other")},
     }
 
 
@@ -362,6 +365,8 @@ class FormalCompilerTests(unittest.TestCase):
                       "toolchain": "t", "_type": "environment"},
             DECL: {"declaration_id": DECL, "status": "searching", "lean_type": "T",
                    "lean_value": "v", "claim_id": f"{P}/c-1", "environment_id": "env-2"},
+             ROOT: {"state_id": ROOT, "status": "open", "exact_state_hash": h("root"),
+                   "semantic_signature": h("sem-root"), "environment_hash": h("x")},
         }
         out = compile_formal(*make(extra))
         self.assertEqual(out.payload.environment["environment_id"], "env-2")
