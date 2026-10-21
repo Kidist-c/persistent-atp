@@ -323,6 +323,20 @@ class TestReaderFeedsObstructionCompiler(unittest.TestCase):
         )
 
         self.assertRegex(compilation.packet_digest, r"^sha256:[0-9a-f]{64}$")
+        self.assertIn(
+            "THEOREM KERNEL (canonical, mandatory)", compilation.packet.content
+        )
+        self.assertIn(collection.kernel.statement, compilation.packet.content)
+        self.assertEqual(
+            compilation.manifest["sources"][0],
+            {
+                "source_id": collection.kernel.kernel_id,
+                "source_version": str(collection.revision),
+                "status": collection.kernel.status.value,
+                "included": True,
+                "reason": "theorem kernel",
+            },
+        )
 
 
 if __name__ == "__main__":
