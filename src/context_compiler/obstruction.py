@@ -179,8 +179,6 @@ _HEADER_TITLE = "OBSTRUCTION"
 _KERNEL_TITLE = "THEOREM KERNEL (canonical, mandatory)"
 _SOURCES_TITLE = "SOURCE ARTIFACTS (complete records)"
 
-_ELLIPSIS = "\u2026"
-
 _MAX_DERIVED_SUSPECTED = 2
 
 
@@ -1126,27 +1124,6 @@ def _render(sections: Sequence[_Section]) -> str:
     )
 
 
-def _truncate_to_budget(text: str, budget: TextBudget, counter: TokenCounter) -> str:
-    if counter.count(text + _ELLIPSIS) <= budget.max_tokens:
-        return text
-    low, high, best = 0, len(text), 0
-    while low <= high:
-        mid = (low + high) // 2
-        if counter.count(text[:mid] + _ELLIPSIS) <= budget.max_tokens:
-            best = mid
-            low = mid + 1
-        else:
-            high = mid - 1
-    if best <= 0:
-        raise ContextValidationError(
-            "text budget is too small to render any of the obstruction packet"
-        )
-    boundary = text.rfind(" ", 0, best)
-    if boundary > 0 and best - boundary <= 40:
-        best = boundary
-    return text[:best].rstrip() + _ELLIPSIS
-
-
 def _fit_to_budget(
     sections: Sequence[_Section], budget: TextBudget, counter: TokenCounter
 ) -> tuple[str, tuple[str, ...]]:
@@ -1162,7 +1139,9 @@ def _fit_to_budget(
         index = optional[-1]
         dropped.append(kept[index].title)
         kept.pop(index)
-    return _truncate_to_budget(_render(kept), budget, counter), tuple(dropped)
+    raise ContextValidationError(
+        "mandatory obstruction sections exceed the text budget"
+    )
 
 
 def _identity_status(body: Mapping[str, Any], records: _Records) -> str:

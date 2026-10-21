@@ -568,15 +568,13 @@ def test_budget_is_respected_and_cheapest_sections_drop_first():
     assert "excluded: omitted to fit text budget" in reasons
 
 
-def test_tiny_budget_still_renders_a_packet():
-    counter = CharHeuristicTokenCounter()
+def test_tiny_budget_cannot_truncate_the_mandatory_kernel():
     case = scenario(text_budget=TextBudget(60))
-    compilation = compile_obstruction(
-        case.request, case.bundle, case.reader, case.task
-    )
-
-    assert counter.count(compilation.packet.content) <= 60
-    assert compilation.packet.content.endswith("\u2026")
+    with pytest.raises(
+        ContextValidationError,
+        match="mandatory obstruction sections exceed the text budget",
+    ):
+        compile_obstruction(case.request, case.bundle, case.reader, case.task)
 
 
 def test_packet_kind_must_be_obstruction():
