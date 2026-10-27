@@ -1,43 +1,8 @@
-"""Shared V1 context-selection policy for the context compilers.
+"""
 
 Every compiler (research, formal, obstruction) follows the same small,
 deterministic, explainable rules.  They may use different categories and
 rendering formats; they do not use different *policy*.
-
-Rules
------
-1. **Mandatory context is never silently dropped.**  Each compiler names its
-   mandatory context (below).  If mandatory text alone does not fit the text
-   budget, compilation fails with ``ContextValidationError``; it never emits a
-   packet that quietly lacks mandatory content.
-2. **Optional context is ordered by a documented, deterministic priority**
-   (lower rank = more important, ties broken by ``source_id``).  There are no
-   scores, embeddings or learned weights in V1.
-3. **Exact duplicates are removed inside a semantic category.**  The survivor is
-   chosen deterministically; the loser is excluded with ``duplicate of <id>``.
-4. **Limits are enforced in priority order.**  Text budgets drop whole optional
-   sections; item-count limits keep the first N candidates.
-5. **Every source gets a decision**, and a source excluded by size or count has
-   an explicit reason built from the constants in this module.
-
-Mandatory context per compiler
-------------------------------
-research     worker instructions, theorem kernel, active branch state,
-             selected move, required claims, open goals, output schema,
-             tool policy
-formal       theorem kernel, selected declaration, root state, pinned
-             environment, resumed run (when resuming)
-obstruction  theorem kernel, obstruction/run identity, observed failures,
-             suspected causes, research questions
-
-Optional-context priority per compiler
---------------------------------------
-research     failure < feedback < lemma < alternative; within a category,
-             context related to the active state/move first
-formal       premises: verified before suggested, then ``lean_name``;
-             prior runs: most recent (highest ordinal) first;
-             transpositions: those touching the root state first
-obstruction  attempts < diagnostics < source listing
 """
 
 from __future__ import annotations
